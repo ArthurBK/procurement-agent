@@ -73,6 +73,22 @@ type ExistingManualLink = {
   sso_supplier_id: string | null;
 };
 
+const KNOWN_VENDOR_DOMAINS: Record<string, string[]> = {
+  aircall: ["aircall.io"],
+  chatgpt: ["openai.com", "chatgpt.com"],
+  fly: ["fly.io"],
+  fullenrich: ["fullenrich.com"],
+  google: ["google.com"],
+  neon: ["neon.tech"],
+  n8n: ["n8n.io"],
+  notion: ["notion.so"],
+  openai: ["openai.com", "chatgpt.com"],
+  qonto: ["qonto.com"],
+  trigger: ["trigger.dev"],
+  vercel: ["vercel.com"],
+  wework: ["wework.com"],
+};
+
 export async function rebuildContractAppLinks({
   organizationId,
   supabaseAdmin,
@@ -375,12 +391,30 @@ export function matchContractToSsoSupplier({
   const contractDomain = extractDomainFromText(contract.vendor_name) ??
     aliases.find((alias) => isAliasForContract(alias, contractName))?.domain ??
     null;
+  const expectedDomains = getExpectedDomains({ aliases, contractDomain, contractName });
+  const primaryExpectedDomain = expectedDomains[0] ?? null;
   const scoredSuppliers = suppliers
     .map((supplier) => ({
       supplier,
-      ...scoreSupplierMatch({ aliases, contractDomain, contractName, supplier }),
+      ...scoreSupplierMatch({
+        aliases,
+        contractDomain,
+        contractName,
+        expectedDomains,
+        primaryExpectedDomain,
+        supplier,
+      }),
     }))
-    .sort((left, right) => right.score - left.score);
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        right.priority - left.priority ||
+        (right.supplier.users_with_signal_90d ?? 0) -
+          (left.supplier.users_with_signal_90d ?? 0) ||
+        String(left.supplier.supplier_name).localeCompare(
+          String(right.supplier.supplier_name),
+        ),
+    );
   const best = scoredSuppliers[0];
 
   if (!best || best.score < 0.68) {
@@ -408,18 +442,34 @@ function scoreSupplierMatch({
   aliases,
   contractDomain,
   contractName,
+  expectedDomains,
+  primaryExpectedDomain,
   supplier,
 }: {
   aliases: VendorAliasForMatching[];
   contractDomain: string | null;
   contractName: string;
+  expectedDomains: string[];
+  primaryExpectedDomain: string | null;
   supplier: SsoSupplierForMatching;
-}): { reason: string; score: number } {
+}): { priority: number; reason: string; score: number } {
   const supplierName = normalizeContractVendorName(supplier.supplier_name);
   const supplierDomain = supplier.supplier_domain?.toLowerCase() ?? null;
+  const domainConflictsWithExpectedVendor =
+    supplierDomain !== null &&
+    expectedDomains.length > 0 &&
+    !expectedDomains.includes(supplierDomain);
 
   if (contractDomain && supplierDomain && contractDomain === supplierDomain) {
-    return { reason: "Exact domain match", score: 1 };
+    return { priority: 100, reason: "Exact domain match", score: 1 };
+  }
+
+  if (supplierDomain && primaryExpectedDomain === supplierDomain) {
+    return { priority: 95, reason: "Known official domain match", score: 0.97 };
+  }
+
+  if (supplierDomain && expectedDomains.includes(supplierDomain)) {
+    return { priority: 75, reason: "Known equivalent domain match", score: 0.93 };
   }
 
   if (
@@ -432,11 +482,15 @@ function scoreSupplierMatch({
       }),
     )
   ) {
-    return { reason: "Manual vendor alias match", score: 0.95 };
+    return { priority: 90, reason: "Manual vendor alias match", score: 0.95 };
   }
 
   if (contractName && supplierName && contractName === supplierName) {
-    return { reason: "Normalized supplier name match", score: 0.96 };
+    if (domainConflictsWithExpectedVendor) {
+      return buildThirdPartyDomainMatch({ supplier });
+    }
+
+    return { priority: 85, reason: "Normalized supplier name match", score: 0.96 };
   }
 
   const contractAliasTarget = getKnownAliasTarget(contractName);
@@ -447,7 +501,11 @@ function scoreSupplierMatch({
     supplierAliasTarget &&
     contractAliasTarget === supplierAliasTarget
   ) {
-    return { reason: "Known alias match", score: 0.94 };
+    if (domainConflictsWithExpectedVendor) {
+      return buildThirdPartyDomainMatch({ supplier });
+    }
+
+    return { priority: 80, reason: "Known alias match", score: 0.94 };
   }
 
   if (
@@ -455,19 +513,81 @@ function scoreSupplierMatch({
     supplierName &&
     (contractName.includes(supplierName) || supplierName.includes(contractName))
   ) {
-    return { reason: "Supplier name contains SSO app name", score: 0.82 };
+    if (domainConflictsWithExpectedVendor) {
+      return buildThirdPartyDomainMatch({ supplier });
+    }
+
+    return { priority: 50, reason: "Supplier name contains SSO app name", score: 0.82 };
   }
 
   const similarity = diceCoefficient(contractName, supplierName);
 
   if (similarity >= 0.68) {
+    if (domainConflictsWithExpectedVendor) {
+      return buildThirdPartyDomainMatch({ supplier });
+    }
+
     return {
+      priority: 40,
       reason: "Fuzzy supplier name match",
       score: Number(similarity.toFixed(2)),
     };
   }
 
-  return { reason: "No match", score: 0 };
+  return { priority: 0, reason: "No match", score: 0 };
+}
+
+function buildThirdPartyDomainMatch({
+  supplier,
+}: {
+  supplier: SsoSupplierForMatching;
+}): { priority: number; reason: string; score: number } {
+  const hasRecentUsers = (supplier.users_with_signal_90d ?? 0) > 0;
+
+  return {
+    priority: hasRecentUsers ? 20 : 10,
+    reason: hasRecentUsers
+      ? "Name overlap, but SSO app uses a non-official vendor domain"
+      : "Third-party integration domain with no recent SSO users",
+    score: hasRecentUsers ? 0.62 : 0.56,
+  };
+}
+
+function getExpectedDomains({
+  aliases,
+  contractDomain,
+  contractName,
+}: {
+  aliases: VendorAliasForMatching[];
+  contractDomain: string | null;
+  contractName: string;
+}): string[] {
+  const domains = [
+    contractDomain,
+    aliases.find((alias) => isAliasForContract(alias, contractName))?.domain ?? null,
+    ...getKnownVendorDomains(contractName),
+  ].flatMap((domain) => (domain ? [domain.toLowerCase()] : []));
+
+  return Array.from(new Set(domains));
+}
+
+function getKnownVendorDomains(contractName: string): string[] {
+  const aliasTarget = getKnownAliasTarget(contractName);
+  const names = new Set(
+    [contractName, aliasTarget].flatMap((name) => (name ? [name] : [])),
+  );
+
+  for (const knownName of Object.keys(KNOWN_VENDOR_DOMAINS)) {
+    if (
+      contractName === knownName ||
+      contractName.startsWith(`${knownName} `) ||
+      contractName.includes(` ${knownName} `)
+    ) {
+      names.add(knownName);
+    }
+  }
+
+  return Array.from(names).flatMap((name) => KNOWN_VENDOR_DOMAINS[name] ?? []);
 }
 
 function isAliasMatch({

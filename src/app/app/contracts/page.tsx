@@ -30,15 +30,22 @@ export default async function ContractsPage() {
     loadContractGaps({ organizationId, supabaseAdmin }),
     loadRenewals({ from, organizationId, supabaseAdmin, to }),
   ]);
-  const reviewRows = [...gaps.possibleMatches, ...gaps.orphanContracts];
+  const visibleContracts = contracts.filter((contract) => contract.linkedSsoAppName);
+  const visibleRenewals = renewals.filter((renewal) => renewal.linkedSsoAppName);
+  const visibleGaps = { ...gaps, orphanContracts: [] };
+  const reviewRows = gaps.possibleMatches;
   const pipelineReviewRows = [...reviewRows, ...gaps.usageReviewContracts];
   const pipelineItems = buildPipelineItems({
-    contracts,
-    renewals,
+    contracts: visibleContracts,
+    renewals: visibleRenewals,
     reviewRows: pipelineReviewRows,
     today: todayIso,
   });
-  const summary = buildContractSummary({ contracts, gaps, today: todayIso });
+  const summary = buildContractSummary({
+    contracts: visibleContracts,
+    gaps: visibleGaps,
+    today: todayIso,
+  });
 
   return (
     <AppShell

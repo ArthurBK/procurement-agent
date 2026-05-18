@@ -96,6 +96,10 @@ export type PennylaneSyncSummary = {
   matchesCreated: number;
   missingContractsDetected: number;
   orphanContractsDetected: number;
+  pdfTextExtractionUnavailable: boolean;
+  pdfTextExtractionsAttempted: number;
+  pdfTextExtractionsFailed: number;
+  pdfTextExtractionsSucceeded: number;
   possibleMatchesDetected: number;
   suppliersFetched: number;
   warnings: string[];
@@ -158,13 +162,12 @@ export async function runPennylaneSync({
         organizationId: context.organizationId,
         supabaseAdmin,
       });
-    const { invoices: enrichedInvoiceRows, warnings: enrichmentWarnings } =
-      await enrichInvoicesWithDetails({
-        client: pennylaneClient,
-        existingInvoiceRawJsonByExternalId,
-        invoices: invoiceRows,
-        ssoSupplierHints,
-      });
+    const enrichmentResult = await enrichInvoicesWithDetails({
+      client: pennylaneClient,
+      existingInvoiceRawJsonByExternalId,
+      invoices: invoiceRows,
+    });
+    const enrichedInvoiceRows = enrichmentResult.invoices;
     const supplierNameById = buildSupplierNameById(supplierRows);
     const normalizedInvoices = normalizeSupplierInvoices({
       invoiceRows: enrichedInvoiceRows,
@@ -222,10 +225,14 @@ export async function runPennylaneSync({
       matchesCreated: matchSummary.matched,
       missingContractsDetected: matchSummary.missingContracts,
       orphanContractsDetected: matchSummary.orphanContracts,
+      pdfTextExtractionUnavailable: enrichmentResult.pdfTextExtractionUnavailable,
+      pdfTextExtractionsAttempted: enrichmentResult.pdfTextExtractionsAttempted,
+      pdfTextExtractionsFailed: enrichmentResult.pdfTextExtractionsFailed,
+      pdfTextExtractionsSucceeded: enrichmentResult.pdfTextExtractionsSucceeded,
       possibleMatchesDetected: matchSummary.possibleMatches,
       suppliersFetched: supplierRows.length,
       warnings: [
-        ...enrichmentWarnings,
+        ...enrichmentResult.warnings,
         ...normalizedInvoices.warnings,
         ...aiExtractionResult.warnings,
       ],
@@ -273,6 +280,10 @@ export async function runPennylaneSync({
       matchesCreated: 0,
       missingContractsDetected: 0,
       orphanContractsDetected: 0,
+      pdfTextExtractionUnavailable: false,
+      pdfTextExtractionsAttempted: 0,
+      pdfTextExtractionsFailed: 0,
+      pdfTextExtractionsSucceeded: 0,
       possibleMatchesDetected: 0,
       suppliersFetched: 0,
       warnings: [],
@@ -348,7 +359,7 @@ export function normalizeSupplierInvoices({
 
       if (!normalized) {
         warnings.push(
-          `Skipped Pennylane invoice ${extractString(invoice, ["id"]) ?? index}: no SSO-related supplier signal.`,
+          `Skipped Pennylane invoice ${extractString(invoice, ["id"]) ?? index}: missing supplier name.`,
         );
       }
 
@@ -403,12 +414,9 @@ export function normalizeSupplierInvoice({
   });
   const filenameSupplierName = inferSupplierNameFromFilename(invoice);
   const supplierName =
-    inferredSsoSupplierName ?? explicitSupplierName ?? filenameSupplierName;
+    explicitSupplierName ?? inferredSsoSupplierName ?? filenameSupplierName;
 
-  if (
-    !supplierName ||
-    !isSsoRelevantSupplier({ invoice, ssoSupplierHints, supplierName })
-  ) {
+  if (!supplierName) {
     return null;
   }
 
@@ -467,18 +475,24 @@ async function enrichInvoicesWithDetails({
   client,
   existingInvoiceRawJsonByExternalId,
   invoices,
-  ssoSupplierHints,
 }: {
   client: PennylaneClient;
   existingInvoiceRawJsonByExternalId: Map<string, Record<string, unknown>>;
   invoices: PennylaneSupplierInvoiceApiRow[];
-  ssoSupplierHints: SsoSupplierHint[];
 }): Promise<{
   invoices: PennylaneSupplierInvoiceApiRow[];
+  pdfTextExtractionUnavailable: boolean;
+  pdfTextExtractionsAttempted: number;
+  pdfTextExtractionsFailed: number;
+  pdfTextExtractionsSucceeded: number;
   warnings: string[];
 }> {
   const warnings: string[] = [];
   const enrichedInvoices: PennylaneSupplierInvoiceApiRow[] = [];
+  let pdfTextExtractionUnavailable = false;
+  let pdfTextExtractionsAttempted = 0;
+  let pdfTextExtractionsFailed = 0;
+  let pdfTextExtractionsSucceeded = 0;
 
   for (const invoice of invoices) {
     const details: Record<string, unknown> = {};
@@ -502,42 +516,45 @@ async function enrichInvoicesWithDetails({
       details[AI_CONTRACT_EXTRACTION_RAW_JSON_KEY] = existingAiExtraction;
     }
 
-    const metadataSupplier = extractString(invoice, [
-      "supplier_name",
-      "supplier.name",
-      "supplier.label",
-      "supplier",
-      "vendor_name",
-    ]);
-    const metadataAlreadyMatchesSso =
-      metadataSupplier &&
-      isSsoRelevantSupplier({
-        invoice,
-        ssoSupplierHints,
-        supplierName: metadataSupplier,
-      });
-
-    if (!metadataAlreadyMatchesSso && !details.pdf_text) {
+    if (!details.pdf_text && !pdfTextExtractionUnavailable) {
+      pdfTextExtractionsAttempted += 1;
       try {
         const pdfText = await extractPdfTextFromInvoice({ client, invoice });
 
         if (pdfText) {
           details.pdf_text = pdfText.slice(0, 20_000);
+          pdfTextExtractionsSucceeded += 1;
         }
       } catch (error) {
-        warnings.push(
-          labelPennylaneError(
-            `PDF text extraction for invoice ${extractString(invoice, ["id"]) ?? "unknown"}`,
-            error,
-          ),
-        );
+        pdfTextExtractionsFailed += 1;
+
+        if (isPdfToTextUnavailableError(error)) {
+          pdfTextExtractionUnavailable = true;
+          warnings.push(
+            "PDF text extraction is unavailable in this runtime; using Pennylane metadata and AI fallback.",
+          );
+        } else {
+          warnings.push(
+            labelPennylaneError(
+              `PDF text extraction for invoice ${extractString(invoice, ["id"]) ?? "unknown"}`,
+              error,
+            ),
+          );
+        }
       }
     }
 
     enrichedInvoices.push({ ...invoice, ...details });
   }
 
-  return { invoices: enrichedInvoices, warnings };
+  return {
+    invoices: enrichedInvoices,
+    pdfTextExtractionUnavailable,
+    pdfTextExtractionsAttempted,
+    pdfTextExtractionsFailed,
+    pdfTextExtractionsSucceeded,
+    warnings,
+  };
 }
 
 async function enhanceInvoicesWithAiExtraction({
@@ -943,30 +960,6 @@ function inferSupplierNameFromFilename(
   return invoicePrefix[1].replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function isSsoRelevantSupplier({
-  invoice,
-  ssoSupplierHints,
-  supplierName,
-}: {
-  invoice: PennylaneSupplierInvoiceApiRow;
-  ssoSupplierHints: SsoSupplierHint[];
-  supplierName: string;
-}): boolean {
-  if (ssoSupplierHints.length === 0) {
-    return true;
-  }
-
-  const invoiceText = normalizeContractVendorName(
-    [supplierName, collectInvoiceText(invoice)].join(" "),
-  );
-
-  return ssoSupplierHints.some((hint) =>
-    getSsoHintCandidates(hint).some((candidate) =>
-      matchesNormalizedText(invoiceText, candidate),
-    ),
-  );
-}
-
 function getSsoHintCandidates(hint: SsoSupplierHint): string[] {
   const normalizedName = normalizeContractVendorName(hint.supplierName);
   const domainStem = normalizeContractVendorName(
@@ -981,6 +974,14 @@ function getSsoHintCandidates(hint: SsoSupplierHint): string[] {
         .filter((candidate) => !GENERIC_SSO_CANDIDATES.has(candidate)),
     ),
   );
+}
+
+function isPdfToTextUnavailableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.message.includes("ENOENT") && error.message.includes("pdftotext");
 }
 
 function matchesNormalizedText(text: string, candidate: string): boolean {

@@ -106,6 +106,54 @@ test("does not create a duplicate missing contract for known equivalent apps", (
   assert.equal(links[0].sso_supplier_id, "supplier-openai");
 });
 
+test("prefers official vendor domains over third-party integration domains", () => {
+  const match = matchContractToSsoSupplier({
+    aliases: [],
+    contract: contract({
+      normalized_vendor_name: "notion labs",
+      vendor_name: "Notion Labs, Inc.",
+    }),
+    suppliers: [
+      supplier({
+        id: "supplier-notion-calendar",
+        supplier_domain: "notiontocalendar.com",
+        supplier_name: "Notion Calendar",
+        users_with_signal_90d: 0,
+      }),
+      supplier({
+        id: "supplier-notion-mail",
+        supplier_domain: "notion.so",
+        supplier_name: "Notion Mail",
+        users_with_signal_90d: 0,
+      }),
+    ],
+  });
+
+  assert.equal(match.matchStatus, "matched");
+  assert.equal(match.ssoSupplierId, "supplier-notion-mail");
+  assert.equal(match.matchReason, "Known official domain match");
+});
+
+test("does not match a contract only because a third-party app name contains the vendor", () => {
+  const match = matchContractToSsoSupplier({
+    aliases: [],
+    contract: contract({
+      normalized_vendor_name: "notion",
+      vendor_name: "Notion",
+    }),
+    suppliers: [
+      supplier({
+        supplier_domain: "notiontocalendar.com",
+        supplier_name: "Notion Calendar",
+        users_with_signal_90d: 0,
+      }),
+    ],
+  });
+
+  assert.equal(match.matchStatus, "orphan_contract");
+  assert.equal(match.ssoSupplierId, null);
+});
+
 test("creates orphan_contract when contract has no SSO app match", () => {
   const links = buildContractAppLinkRows({
     aliases: [],
