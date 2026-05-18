@@ -69,9 +69,15 @@ function getSsoHintCandidates(hint: SsoSupplierHint): string[] {
   );
   const firstNameToken = normalizedName.split(" ")[0] ?? "";
 
+  const candidates = [
+    normalizedName,
+    domainStem,
+    firstNameToken.length >= 5 ? firstNameToken : "",
+  ];
+
   return Array.from(
     new Set(
-      [normalizedName, domainStem, firstNameToken]
+      candidates
         .filter((candidate) => candidate.length >= 3)
         .filter((candidate) => !GENERIC_SSO_CANDIDATES.has(candidate)),
     ),

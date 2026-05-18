@@ -10,7 +10,6 @@ import type {
 import {
   buildSupplierIdentityDashboard,
   isSameIdentitySupplier,
-  normalizeIdentityName,
   resolveIdentitySupplierDomain,
 } from "@/lib/integrations/google/matching";
 import {
@@ -737,11 +736,12 @@ async function ensureIdentityProviderSuppliers({
   const discoveredSuppliers: SupplierForIdentityMatch[] = [];
 
   for (const appName of [
+    // Revoke events are not active usage, but they still identify apps that
+    // existed in Google and can help match Pennylane contracts.
     ...((oauthResult.data ?? []) as Array<{
       app_name: string | null;
       event_name: string;
     }>)
-      .filter((event) => normalizeIdentityName(event.event_name) === "authorize")
       .map((event) => event.app_name),
     ...((samlResult.data ?? []) as Array<{ saml_app_name: string | null }>).map(
       (event) => event.saml_app_name,

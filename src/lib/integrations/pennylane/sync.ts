@@ -12,6 +12,7 @@ import {
   type InferredContract,
   type PennylaneInvoiceForContractExtraction,
 } from "@/lib/contracts/extraction";
+import { normalizeContractVendorName } from "@/lib/contracts/normalization";
 import {
   AI_CONTRACT_EXTRACTION_RAW_JSON_KEY,
   buildAiContractExtractionErrorMetadata,
@@ -45,6 +46,10 @@ import {
   inferSupplierNameFromSsoHints,
   type SsoSupplierHint,
 } from "@/lib/integrations/pennylane/supplierNameInference";
+import {
+  sanitizePostgresString,
+  sanitizePostgresValue,
+} from "@/lib/integrations/pennylane/postgresSanitize";
 import { recoverStalePennylaneSyncRuns } from "@/lib/integrations/pennylane/syncRunRecovery";
 import type { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -444,7 +449,7 @@ export function normalizeSupplierInvoice({
     return null;
   }
 
-  const rawJson = invoice;
+  const rawJson = sanitizePostgresValue(invoice) as Record<string, unknown>;
   const amountCents = extractAmountCents(invoice, [
     "amount_cents",
     "currency_amount_cents",
@@ -919,8 +924,12 @@ async function persistInvoiceAiMetadata({
   const { error } = await supabaseAdmin
     .from("pennylane_supplier_invoices")
     .update({
-      raw_json: invoice.rawJson,
-      source_hash: invoice.sourceHash ?? buildInvoiceSourceHash(invoice.rawJson),
+      raw_json: sanitizePostgresValue(invoice.rawJson),
+      source_hash:
+        invoice.sourceHash ??
+        buildInvoiceSourceHash(
+          sanitizePostgresValue(invoice.rawJson) as Record<string, unknown>,
+        ),
       updated_at: new Date().toISOString(),
     })
     .eq("id", invoice.id);
@@ -1146,33 +1155,62 @@ async function loadSsoSupplierHints({
   organizationId: string;
   supabaseAdmin: SupabaseAdminClient;
 }): Promise<SsoSupplierHint[]> {
-  const { data, error } = await supabaseAdmin
-    .from("saas_suppliers")
-    .select(
-      [
-        "supplier_name",
-        "supplier_domain",
-        "source",
-        "supplier_identity_matches(identity_mode)",
-      ].join(", "),
-    )
-    .eq("organization_id", organizationId)
-    .neq("source", "pennylane");
+  const [suppliersResult, organizationResult] = await Promise.all([
+    supabaseAdmin
+      .from("saas_suppliers")
+      .select(
+        [
+          "supplier_name",
+          "supplier_domain",
+          "source",
+          "supplier_identity_matches(identity_mode)",
+        ].join(", "),
+      )
+      .eq("organization_id", organizationId)
+      .neq("source", "pennylane"),
+    supabaseAdmin
+      .from("organizations")
+      .select("name, primary_domain")
+      .eq("id", organizationId)
+      .maybeSingle(),
+  ]);
 
-  if (error) {
-    throw new Error(`Unable to load SSO supplier hints: ${error.message}`);
+  if (suppliersResult.error) {
+    throw new Error(
+      `Unable to load SSO supplier hints: ${suppliersResult.error.message}`,
+    );
   }
 
-  return ((data ?? []) as unknown as Array<{
+  if (organizationResult.error) {
+    throw new Error(
+      `Unable to load organization for SSO supplier hints: ${organizationResult.error.message}`,
+    );
+  }
+
+  const organizationSelfNames = buildOrganizationSelfNames(
+    organizationResult.data as
+      | { name: string | null; primary_domain: string | null }
+      | null,
+  );
+
+  return ((suppliersResult.data ?? []) as unknown as Array<{
     supplier_identity_matches?: Array<{ identity_mode: string | null }>;
     source: string | null;
     supplier_domain: string | null;
     supplier_name: string;
   }>)
     .filter((supplier) =>
+      supplier.source === "google_workspace" ||
       supplier.supplier_identity_matches?.some(
         (match) => match.identity_mode && match.identity_mode !== "unknown",
       ),
+    )
+    .filter((supplier) =>
+      !isOrganizationSelfSupplier({
+        organizationSelfNames,
+        supplierDomain: supplier.supplier_domain,
+        supplierName: supplier.supplier_name,
+      }),
     )
     .map((supplier) => ({
       supplierDomain: resolveIdentitySupplierDomain({
@@ -1182,6 +1220,42 @@ async function loadSsoSupplierHints({
       }),
       supplierName: supplier.supplier_name,
     }));
+}
+
+function buildOrganizationSelfNames(
+  organization: { name: string | null; primary_domain: string | null } | null,
+): Set<string> {
+  const domainStem = organization?.primary_domain?.split(".")[0] ?? null;
+
+  return new Set(
+    [organization?.name ?? null, domainStem]
+      .flatMap((value) => (value ? [normalizeContractVendorName(value)] : []))
+      .filter(Boolean),
+  );
+}
+
+function isOrganizationSelfSupplier({
+  organizationSelfNames,
+  supplierDomain,
+  supplierName,
+}: {
+  organizationSelfNames: Set<string>;
+  supplierDomain: string | null;
+  supplierName: string;
+}): boolean {
+  const normalizedSupplierName = normalizeContractVendorName(supplierName);
+  const normalizedDomainStem = normalizeContractVendorName(
+    supplierDomain?.split(".")[0] ?? null,
+  );
+
+  return (
+    Array.from(organizationSelfNames).some(
+      (selfName) =>
+        normalizedSupplierName === selfName ||
+        normalizedSupplierName.startsWith(`${selfName} `),
+    ) ||
+    Boolean(normalizedDomainStem && organizationSelfNames.has(normalizedDomainStem))
+  );
 }
 
 async function deletePennylaneSaasSuppliers({
@@ -1381,10 +1455,12 @@ async function upsertSupplierInvoices({
     return { createdCount: 0, rows: [], updatedCount: 0 };
   }
 
-  const rows: Array<Record<string, unknown>> = invoices.map((invoice) => ({
-    ...invoice,
-    organization_id: organizationId,
-  }));
+  const rows: Array<Record<string, unknown>> = invoices.map((invoice) =>
+    sanitizePostgresValue({
+      ...invoice,
+      organization_id: organizationId,
+    }) as Record<string, unknown>,
+  );
   const externalIds = rows.map((row) => String(row.external_id));
   const existingResult = await supabaseAdmin
     .from("pennylane_supplier_invoices")
@@ -1671,7 +1747,7 @@ function extractString(
     const rawValue = getPath(value, path);
 
     if (typeof rawValue === "string" && rawValue.trim()) {
-      return rawValue.trim();
+      return sanitizePostgresString(rawValue.trim());
     }
 
     if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
@@ -1681,6 +1757,7 @@ function extractString(
 
   return null;
 }
+
 
 function extractDate(value: Record<string, unknown>, paths: string[]): string | null {
   const rawValue = extractString(value, paths);

@@ -270,6 +270,85 @@ test("groups invoices by AI extracted vendor and product when Pennylane supplier
   );
 });
 
+test("merges similar product variants for the same vendor amount and frequency", () => {
+  const contracts = inferContractsFromPennylaneInvoices([
+    invoice({
+      amountCents: 8400,
+      externalId: "aircall-1",
+      invoiceDate: "2025-06-22",
+      rawJson: {
+        period_end: "2025-07-21",
+        period_start: "2025-06-22",
+        [AI_CONTRACT_EXTRACTION_RAW_JSON_KEY]: aiExtractionFields({
+          canonicalVendorName: "Aircall",
+          productName: "Standard User License",
+          vendorName: "Aircall SAS",
+        }),
+      },
+      supplierName: "SWIFTGUM",
+    }),
+    invoice({
+      amountCents: 8400,
+      externalId: "aircall-2",
+      invoiceDate: "2025-08-22",
+      rawJson: {
+        period_end: "2025-09-21",
+        period_start: "2025-08-22",
+        [AI_CONTRACT_EXTRACTION_RAW_JSON_KEY]: aiExtractionFields({
+          canonicalVendorName: "Aircall",
+          productName: "Standard User License Essentials",
+          vendorName: "Aircall SAS",
+        }),
+      },
+      supplierName: "SWIFTGUM",
+    }),
+  ]);
+
+  assert.equal(contracts.length, 1);
+  assert.equal(contracts[0].productName, "Standard User License Essentials");
+  assert.equal(contracts[0].nextRenewalDate, "2025-09-21");
+  assert.equal(contracts[0].sourceExternalId, "pennylane:aircall:standard user license essentials:EUR:monthly");
+  assert.deepEqual(
+    contracts[0].extractedFields.product_name_variants,
+    ["Standard User License", "Standard User License Essentials"],
+  );
+});
+
+test("keeps distinct products separate for the same vendor", () => {
+  const contracts = inferContractsFromPennylaneInvoices([
+    invoice({
+      amountCents: 4985,
+      externalId: "notion-calendar-1",
+      rawJson: {
+        [AI_CONTRACT_EXTRACTION_RAW_JSON_KEY]: aiExtractionFields({
+          canonicalVendorName: "Notion",
+          productName: "Notion Calendar",
+          vendorName: "Notion Labs, Inc.",
+        }),
+      },
+      supplierName: "SWIFTGUM",
+    }),
+    invoice({
+      amountCents: 4985,
+      externalId: "notion-mail-1",
+      rawJson: {
+        [AI_CONTRACT_EXTRACTION_RAW_JSON_KEY]: aiExtractionFields({
+          canonicalVendorName: "Notion",
+          productName: "Notion Mail",
+          vendorName: "Notion Labs, Inc.",
+        }),
+      },
+      supplierName: "SWIFTGUM",
+    }),
+  ]);
+
+  assert.equal(contracts.length, 2);
+  assert.deepEqual(
+    contracts.map((contract) => contract.productName).sort(),
+    ["Notion Calendar", "Notion Mail"],
+  );
+});
+
 test("infers monthly frequency from recurring invoice history", () => {
   assert.equal(
     inferFrequencyFromInvoiceHistory([

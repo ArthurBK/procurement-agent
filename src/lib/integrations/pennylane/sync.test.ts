@@ -36,3 +36,21 @@ test("does not infer a supplier when invoice text has no SSO-visible signal", ()
 
   assert.equal(supplierName, null);
 });
+
+test("does not infer supplier from a short first token inside receipt lines", () => {
+  const supplierName = inferSupplierNameFromSsoHints({
+    invoice: {
+      amount: "17.00",
+      currency: "EUR",
+      date: "2025-04-30",
+      id: "food-receipt",
+      pdf_text:
+        "Order receipt Sandwich + boisson + dessert Full pastrami Total EUR 17.00",
+    },
+    ssoSupplierHints: [
+      { supplierDomain: null, supplierName: "Full enrich - sign in" },
+    ],
+  });
+
+  assert.equal(supplierName, null);
+});

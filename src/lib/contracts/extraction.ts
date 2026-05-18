@@ -13,7 +13,7 @@ import {
   normalizeAiConfidence,
   type AiContractExtractionFields,
 } from "./aiExtraction.ts";
-import { normalizeContractVendorName } from "./normalization.ts";
+import { diceCoefficient, normalizeContractVendorName } from "./normalization.ts";
 
 export type BillingFrequency = "monthly" | "quarterly" | "annual" | "unknown";
 export type ContractConfidence = "high" | "medium" | "low";
@@ -89,7 +89,9 @@ export function inferContractsFromPennylaneInvoices(
     groups.set(groupKey, [...(groups.get(groupKey) ?? []), invoice]);
   }
 
-  return Array.from(groups.values()).flatMap(inferContractForInvoiceGroup);
+  return mergeSimilarContractProductVariants(
+    Array.from(groups.values()).flatMap(inferContractForInvoiceGroup),
+  );
 }
 
 export function inferContractForInvoiceGroup(
@@ -743,6 +745,149 @@ function buildContractSourceExternalId({
   ];
 
   return parts.join(":");
+}
+
+function mergeSimilarContractProductVariants(
+  contracts: InferredContract[],
+): InferredContract[] {
+  return contracts.reduce<InferredContract[]>((mergedContracts, contract) => {
+    const existingIndex = mergedContracts.findIndex((existingContract) =>
+      shouldMergeProductVariantContracts(existingContract, contract),
+    );
+
+    if (existingIndex === -1) {
+      return [...mergedContracts, contract];
+    }
+
+    const existingContract = mergedContracts[existingIndex];
+    const updatedContracts = [...mergedContracts];
+    updatedContracts[existingIndex] = mergeProductVariantContracts(
+      existingContract,
+      contract,
+    );
+
+    return updatedContracts;
+  }, []);
+}
+
+function shouldMergeProductVariantContracts(
+  left: InferredContract,
+  right: InferredContract,
+): boolean {
+  if (
+    left.normalizedVendorName !== right.normalizedVendorName ||
+    left.currency !== right.currency ||
+    left.billingFrequency !== right.billingFrequency
+  ) {
+    return false;
+  }
+
+  const leftAmount = left.recurringAmountCents ?? left.lastInvoiceAmountCents;
+  const rightAmount = right.recurringAmountCents ?? right.lastInvoiceAmountCents;
+
+  if (leftAmount === null || rightAmount === null || leftAmount !== rightAmount) {
+    return false;
+  }
+
+  return areSimilarProductVariants(left.productName, right.productName);
+}
+
+function areSimilarProductVariants(
+  leftProductName: string | null,
+  rightProductName: string | null,
+): boolean {
+  const left = normalizeContractVendorName(leftProductName);
+  const right = normalizeContractVendorName(rightProductName);
+
+  if (!left || !right) {
+    return false;
+  }
+
+  if (left === right) {
+    return true;
+  }
+
+  const shorter = left.length < right.length ? left : right;
+  const longer = left.length < right.length ? right : left;
+  const shorterTokenCount = shorter.split(" ").filter(Boolean).length;
+
+  if (
+    shorter.length >= 12 &&
+    shorterTokenCount >= 3 &&
+    longer.startsWith(`${shorter} `)
+  ) {
+    return true;
+  }
+
+  return diceCoefficient(left, right) >= 0.9;
+}
+
+function mergeProductVariantContracts(
+  left: InferredContract,
+  right: InferredContract,
+): InferredContract {
+  const winner = selectLatestContract(left, right);
+  const other = winner === left ? right : left;
+  const extractedFields = {
+    ...other.extractedFields,
+    ...winner.extractedFields,
+    invoice_dates: uniqueStrings([
+      ...getStringArray(other.extractedFields.invoice_dates),
+      ...getStringArray(winner.extractedFields.invoice_dates),
+    ]).sort(),
+    invoice_external_ids: uniqueStrings([
+      ...getStringArray(other.extractedFields.invoice_external_ids),
+      ...getStringArray(winner.extractedFields.invoice_external_ids),
+    ]),
+    merged_product_variant: true,
+    product_name_variants: uniqueStrings([
+      ...getStringArray(other.extractedFields.product_name_variants),
+      ...getStringArray(winner.extractedFields.product_name_variants),
+      other.productName,
+      winner.productName,
+    ]),
+  };
+
+  return {
+    ...winner,
+    confidence:
+      confidenceRank(other.confidence) < confidenceRank(winner.confidence)
+        ? other.confidence
+        : winner.confidence,
+    extractedFields,
+  };
+}
+
+function selectLatestContract(
+  left: InferredContract,
+  right: InferredContract,
+): InferredContract {
+  const leftDate =
+    left.currentPeriodEnd ?? left.nextRenewalDate ?? left.currentPeriodStart ?? "";
+  const rightDate =
+    right.currentPeriodEnd ?? right.nextRenewalDate ?? right.currentPeriodStart ?? "";
+
+  return rightDate.localeCompare(leftDate) > 0 ? right : left;
+}
+
+function getStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function uniqueStrings(values: Array<string | null>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function confidenceRank(confidence: ContractConfidence): number {
+  return { low: 0, medium: 1, high: 2 }[confidence];
 }
 
 function selectAiRecurringAmount({
