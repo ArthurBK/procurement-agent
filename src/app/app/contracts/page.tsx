@@ -2,6 +2,7 @@ import { connection } from "next/server";
 import Link from "next/link";
 import { AppShell } from "@/app/app/_components/app-shell";
 import { ContractsPipeline } from "@/app/app/contracts/_components/contracts-pipeline";
+import { SyncPennylaneButton } from "@/app/app/contracts/_components/sync-pennylane-button";
 import {
   buildContractSummary,
   getContractRecommendedAction,
@@ -11,6 +12,7 @@ import {
   type ContractRow,
   type ContractGapRow,
 } from "@/lib/contracts/frontendData";
+import { loadPennylaneStatus } from "@/lib/integrations/pennylane/frontendData";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -21,9 +23,10 @@ export default async function ContractsPage() {
   const supabaseAdmin = createSupabaseAdminClient();
   const today = new Date();
   const todayIso = today.toISOString().slice(0, 10);
-  const [contracts, gaps] = await Promise.all([
+  const [contracts, gaps, pennylaneStatus] = await Promise.all([
     loadContracts({ organizationId, supabaseAdmin }),
     loadContractGaps({ organizationId, supabaseAdmin }),
+    loadPennylaneStatus({ organizationId, supabaseAdmin }),
   ]);
   const matchedContracts = contracts.filter((contract) => contract.linkedSsoAppName);
   const visibleGaps = { ...gaps, orphanContracts: [] };
@@ -67,6 +70,28 @@ export default async function ContractsPage() {
           label="Estimated monthly spend"
           value={formatMoney(summary.estimatedMonthlySpendCents, "EUR")}
         />
+      </section>
+
+      <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-950">
+              Pennylane sync
+            </h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              Runtime database: {pennylaneStatus.invoicesSynced} invoice
+              {pennylaneStatus.invoicesSynced === 1 ? "" : "s"} synced,{" "}
+              {pennylaneStatus.contractsInferred} contract
+              {pennylaneStatus.contractsInferred === 1 ? "" : "s"} inferred.
+              {pennylaneStatus.lastSyncCompletedAt
+                ? ` Last completed ${formatNullableDateTime(
+                    pennylaneStatus.lastSyncCompletedAt,
+                  )}.`
+                : ""}
+            </p>
+          </div>
+          <SyncPennylaneButton disabled={pennylaneStatus.status === "syncing"} />
+        </div>
       </section>
 
       <MatchedContractsTable
@@ -361,6 +386,17 @@ function formatNullableDate(value: string | null): string {
 
   return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
+  }).format(new Date(value));
+}
+
+function formatNullableDateTime(value: string | null): string {
+  if (!value) {
+    return "-";
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
   }).format(new Date(value));
 }
 
