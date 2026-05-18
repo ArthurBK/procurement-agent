@@ -15,6 +15,7 @@ import {
   getKnownAliasTarget,
   matchSupplierToSignal,
   normalizeIdentityName,
+  resolveIdentitySupplierDomain,
   type IdentitySignal,
   type SupplierForIdentityMatch,
 } from "@/lib/integrations/google/matching";
@@ -36,6 +37,7 @@ type SupplierRow = {
   category: string | null;
   id: string;
   monthly_spend: number | null;
+  source: string | null;
   supplier_domain: string | null;
   supplier_name: string;
 };
@@ -711,7 +713,7 @@ export async function loadSupplierInventory({
     loadIdentitySignals({ organizationId, supabaseAdmin }),
     supabaseAdmin
       .from("saas_suppliers")
-      .select("id, supplier_name, supplier_domain, monthly_spend, category")
+      .select("id, supplier_name, supplier_domain, monthly_spend, category, source")
       .eq("organization_id", organizationId)
       .order("supplier_name", { ascending: true }),
   ]);
@@ -739,7 +741,11 @@ export async function loadSupplierInventory({
         supplier.monthly_spend === null
           ? null
           : Number((supplier.monthly_spend / 100).toFixed(2)),
-      supplierDomain: supplier.supplier_domain,
+      supplierDomain: resolveIdentitySupplierDomain({
+        source: supplier.source,
+        supplierDomain: supplier.supplier_domain,
+        supplierName: supplier.supplier_name,
+      }),
       supplierId: supplier.id,
       supplierName: supplier.supplier_name,
       usageDataStatus: toIdentityUsageStatus(identity),

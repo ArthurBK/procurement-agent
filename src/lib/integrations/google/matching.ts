@@ -1,6 +1,7 @@
 export type SupplierForIdentityMatch = {
   id: string;
   monthlySpend: number | null;
+  source?: string | null;
   supplierDomain: string | null;
   supplierName: string;
 };
@@ -47,17 +48,57 @@ export type SupplierIdentityMatchResult = {
 
 const KNOWN_ALIAS_TARGETS: Record<string, string> = {
   aircall: "aircall",
+  apollo: "apollo",
+  "apollo graphql": "apollo",
   chatgpt: "openai",
   fly: "fly",
   "fly io": "fly",
   fullenrich: "fullenrich",
+  google: "google",
+  "google chrome": "google",
+  luma: "luma",
   neon: "neon",
+  "neon console": "neon",
   n8n: "n8n",
+  notion: "notion",
+  "notion calendar": "notion",
+  "notion mail": "notion",
   openai: "openai",
   qonto: "qonto",
+  slack: "slack",
   trigger: "trigger",
   "trigger dev": "trigger",
   vercel: "vercel",
+  wework: "wework",
+};
+
+const KNOWN_NORMALIZED_NAME_DOMAINS: Record<string, string> = {
+  apollo: "apollographql.com",
+  "apollo graphql": "apollographql.com",
+  chatgpt: "chatgpt.com",
+  "google chrome": "google.com",
+  luma: "lumalabs.ai",
+  "neon console": "neon.tech",
+  "notion calendar": "notion.so",
+  "notion mail": "notion.so",
+};
+
+const KNOWN_ALIAS_DOMAINS: Record<string, string> = {
+  aircall: "aircall.io",
+  apollo: "apollographql.com",
+  fly: "fly.io",
+  fullenrich: "fullenrich.com",
+  google: "google.com",
+  luma: "lumalabs.ai",
+  neon: "neon.tech",
+  n8n: "n8n.io",
+  notion: "notion.so",
+  openai: "openai.com",
+  qonto: "qonto.com",
+  slack: "slack.com",
+  trigger: "trigger.dev",
+  vercel: "vercel.com",
+  wework: "wework.com",
 };
 
 const NEXT_ACTIONS: Record<string, string> = {
@@ -85,7 +126,9 @@ export function buildSupplierIdentityDashboard({
   suppliers: SupplierForIdentityMatch[];
   suspendedUserEmails: Set<string>;
 }): SupplierIdentityDashboardRow[] {
-  return dedupeIdentitySuppliers(suppliers).map((supplier) => {
+  return dedupeIdentitySuppliers(
+    suppliers.map(normalizeSupplierForIdentityMatch),
+  ).map((supplier) => {
     const matchedSignals = signals
       .map((signal) => ({
         match: matchSupplierToSignal(supplier, signal),
@@ -178,7 +221,11 @@ export function isSameIdentitySupplier(
   const leftAliasTarget = getKnownAliasTarget(leftName);
   const rightAliasTarget = getKnownAliasTarget(rightName);
 
-  if (leftAliasTarget && leftAliasTarget === rightAliasTarget) {
+  if (
+    leftAliasTarget &&
+    leftAliasTarget === rightAliasTarget &&
+    (leftName === leftAliasTarget || rightName === rightAliasTarget)
+  ) {
     return true;
   }
 
@@ -203,6 +250,26 @@ export function normalizeIdentityName(input: string | null | undefined): string 
     .replace(/\b(inc|llc|ltd|limited|sas|sarl|gmbh|corp|corporation)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function resolveIdentitySupplierDomain({
+  source,
+  supplierDomain,
+  supplierName,
+}: {
+  source?: string | null;
+  supplierDomain: string | null;
+  supplierName: string | null | undefined;
+}): string | null {
+  const nameDomain = getDomainOnlyName(supplierName ?? "");
+  const knownDomain = getKnownIdentityDomain(normalizeIdentityName(supplierName));
+  const storedDomain = extractDomain(supplierDomain ?? "");
+
+  if (source === "google_workspace") {
+    return nameDomain ?? knownDomain;
+  }
+
+  return storedDomain ?? nameDomain ?? knownDomain;
 }
 
 export function matchSupplierToSignal(
@@ -445,6 +512,29 @@ export function getKnownAliasTarget(normalizedName: string): string | null {
   }
 
   return null;
+}
+
+export function getKnownIdentityDomain(normalizedName: string): string | null {
+  if (KNOWN_NORMALIZED_NAME_DOMAINS[normalizedName]) {
+    return KNOWN_NORMALIZED_NAME_DOMAINS[normalizedName];
+  }
+
+  const aliasTarget = getKnownAliasTarget(normalizedName);
+
+  return aliasTarget ? (KNOWN_ALIAS_DOMAINS[aliasTarget] ?? null) : null;
+}
+
+function normalizeSupplierForIdentityMatch(
+  supplier: SupplierForIdentityMatch,
+): SupplierForIdentityMatch {
+  return {
+    ...supplier,
+    supplierDomain: resolveIdentitySupplierDomain({
+      source: supplier.source,
+      supplierDomain: supplier.supplierDomain,
+      supplierName: supplier.supplierName,
+    }),
+  };
 }
 
 function extractDomain(value: string): string | null {

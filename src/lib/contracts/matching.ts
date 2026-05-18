@@ -7,6 +7,7 @@ import { reviewContractMatchWithAi } from "./aiMatching.ts";
 import {
   getKnownAliasTarget,
   isSameIdentitySupplier,
+  resolveIdentitySupplierDomain,
 } from "../integrations/google/matching.ts";
 import type { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -159,7 +160,11 @@ export async function rebuildContractAppLinks({
       identity_mode: identity?.identity_mode ?? null,
       last_signal_at: identity?.last_signal_at ?? null,
       source: supplier.source,
-      supplier_domain: supplier.supplier_domain,
+      supplier_domain: resolveIdentitySupplierDomain({
+        source: supplier.source,
+        supplierDomain: supplier.supplier_domain,
+        supplierName: supplier.supplier_name,
+      }),
       supplier_name: supplier.supplier_name,
       users_with_signal_90d: identity?.users_with_signal_90d ?? 0,
     };

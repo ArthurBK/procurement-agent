@@ -35,11 +35,6 @@ type SupplierProfileUpsert = {
   updated_at: string;
 };
 
-type SupplierDomainUpdate = {
-  domain: string;
-  supplierId: string;
-};
-
 const MAX_IDENTITY_LOGO_SEARCHES = 20;
 
 export async function autoEnrichIdentitySupplierLogos({
@@ -80,20 +75,11 @@ export async function autoEnrichIdentitySupplierLogos({
     supabaseAdmin,
   });
   const upserts: SupplierProfileUpsert[] = [];
-  const supplierDomainUpdates: SupplierDomainUpdate[] = [];
   const suppliersToSearch: SaasSupplierLogoRow[] = [];
 
   for (const supplier of suppliers) {
     const supplierKey = normalizeSupplierKey(supplier.supplier_name);
     const profile = profilesByKey.get(supplierKey);
-    const profileDomain = normalizeDomain(profile?.domain);
-
-    if (!normalizeDomain(supplier.supplier_domain) && profileDomain) {
-      supplierDomainUpdates.push({
-        domain: profileDomain,
-        supplierId: supplier.id,
-      });
-    }
 
     if (
       normalizeDomain(supplier.supplier_domain) ||
@@ -133,10 +119,6 @@ export async function autoEnrichIdentitySupplierLogos({
       supplier_key: supplierKey,
       updated_at: now,
     });
-    supplierDomainUpdates.push({
-      domain: result.domain,
-      supplierId: supplier.id,
-    });
   }
 
   if (upserts.length > 0) {
@@ -148,8 +130,6 @@ export async function autoEnrichIdentitySupplierLogos({
       throw new Error(`Unable to save identity supplier logos: ${upsertError.message}`);
     }
   }
-
-  await updateSupplierDomains({ supplierDomainUpdates, supabaseAdmin });
 }
 
 export async function loadSupplierLogoProfilesByName({
@@ -177,11 +157,20 @@ export function getSupplierLogoUrl({
   profile: SupplierLogoProfileRow | undefined;
   supplierDomain: string | null;
 }): string | null {
+  const normalizedSupplierDomain = normalizeDomain(supplierDomain);
+  const normalizedProfileDomain = normalizeDomain(profile?.domain);
+
   if (profile?.logo_url) {
-    return profile.logo_url;
+    return !normalizedSupplierDomain ||
+      normalizedProfileDomain === normalizedSupplierDomain
+      ? profile.logo_url
+      : buildLogoUrl(normalizedSupplierDomain);
   }
 
-  if (profile?.domain) {
+  if (
+    profile?.domain &&
+    (!normalizedSupplierDomain || normalizedProfileDomain === normalizedSupplierDomain)
+  ) {
     return buildLogoUrl(profile.domain);
   }
 
@@ -214,38 +203,6 @@ async function loadSupplierProfilesByKey({
       profile,
     ]),
   );
-}
-
-async function updateSupplierDomains({
-  supplierDomainUpdates,
-  supabaseAdmin,
-}: {
-  supplierDomainUpdates: SupplierDomainUpdate[];
-  supabaseAdmin: SupabaseAdminClient;
-}) {
-  const uniqueUpdates = Array.from(
-    new Map(
-      supplierDomainUpdates.map((update) => [update.supplierId, update]),
-    ).values(),
-  );
-
-  const results = await Promise.all(
-    uniqueUpdates.map((update) =>
-      supabaseAdmin
-        .from("saas_suppliers")
-        .update({
-          supplier_domain: update.domain,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", update.supplierId),
-    ),
-  );
-
-  const updateError = results.find((result) => result.error)?.error;
-
-  if (updateError) {
-    throw new Error(`Unable to update supplier logo domains: ${updateError.message}`);
-  }
 }
 
 async function findLogoResult(

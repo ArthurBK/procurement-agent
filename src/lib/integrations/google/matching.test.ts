@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildSupplierIdentityDashboard,
   dedupeIdentitySuppliers,
+  resolveIdentitySupplierDomain,
 } from "./matching.ts";
 
 test("matches known aliases like ChatGPT to OpenAI", () => {
@@ -229,5 +230,54 @@ test("does not deduplicate different products sharing a vendor domain", () => {
   assert.deepEqual(
     suppliers.map((supplier) => supplier.supplierName),
     ["Notion Calendar", "Notion Email"],
+  );
+});
+
+test("resolves Google Workspace supplier domains from deterministic identity aliases", () => {
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: "apollo.de",
+      supplierName: "Apollo",
+    }),
+    "apollographql.com",
+  );
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: "console.com",
+      supplierName: "Neon Console",
+    }),
+    "neon.tech",
+  );
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: "notiontocalendar.com",
+      supplierName: "Notion Calendar",
+    }),
+    "notion.so",
+  );
+});
+
+test("does not trust Logo.dev domains for unknown Google Workspace suppliers", () => {
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: "groundwork.org.uk",
+      supplierName: "Groundwork",
+    }),
+    null,
+  );
+});
+
+test("keeps stored domains for non-Google supplier sources", () => {
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "pennylane",
+      supplierDomain: "groundwork.org.uk",
+      supplierName: "Groundwork",
+    }),
+    "groundwork.org.uk",
   );
 });

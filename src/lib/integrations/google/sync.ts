@@ -11,6 +11,7 @@ import {
   buildSupplierIdentityDashboard,
   isSameIdentitySupplier,
   normalizeIdentityName,
+  resolveIdentitySupplierDomain,
 } from "@/lib/integrations/google/matching";
 import {
   GoogleApiError,
@@ -183,6 +184,10 @@ export async function runGoogleWorkspaceSync({
       warnings,
     });
     const identitySuppliersSynced = await ensureIdentityProviderSuppliers({
+      organizationId,
+      supabaseAdmin,
+    });
+    await repairIdentityProviderSupplierDomains({
       organizationId,
       supabaseAdmin,
     });
@@ -693,7 +698,7 @@ async function ensureIdentityProviderSuppliers({
         .eq("organization_id", organizationId),
       supabaseAdmin
         .from("saas_suppliers")
-        .select("supplier_name, supplier_domain")
+        .select("supplier_name, supplier_domain, source")
         .eq("organization_id", organizationId),
     ]);
 
@@ -712,6 +717,7 @@ async function ensureIdentityProviderSuppliers({
 
   const existingSuppliers = (
     (existingSuppliersResult.data ?? []) as Array<{
+      source: string | null;
       supplier_domain: string | null;
       supplier_name: string;
     }>
@@ -719,7 +725,12 @@ async function ensureIdentityProviderSuppliers({
     (supplier): SupplierForIdentityMatch => ({
       id: "",
       monthlySpend: null,
-      supplierDomain: supplier.supplier_domain,
+      source: supplier.source,
+      supplierDomain: resolveIdentitySupplierDomain({
+        source: supplier.source,
+        supplierDomain: supplier.supplier_domain,
+        supplierName: supplier.supplier_name,
+      }),
       supplierName: supplier.supplier_name,
     }),
   );
@@ -740,10 +751,15 @@ async function ensureIdentityProviderSuppliers({
     ),
   ]) {
     const supplierName = normalizeSupplierDisplayName(appName);
-    const supplierDomain = extractDomainFromText(supplierName);
+    const supplierDomain = resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: null,
+      supplierName,
+    });
     const supplier: SupplierForIdentityMatch = {
       id: "",
       monthlySpend: null,
+      source: "google_workspace",
       supplierDomain,
       supplierName,
     };
@@ -788,16 +804,75 @@ async function ensureIdentityProviderSuppliers({
   return rows.length;
 }
 
-function normalizeSupplierDisplayName(input: string | null | undefined): string {
-  return (input ?? "").replace(/\s+/g, " ").trim();
+async function repairIdentityProviderSupplierDomains({
+  organizationId,
+  supabaseAdmin,
+}: {
+  organizationId: string;
+  supabaseAdmin: SupabaseAdminClient;
+}): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from("saas_suppliers")
+    .select("id, supplier_name, supplier_domain, source")
+    .eq("organization_id", organizationId)
+    .eq("source", "google_workspace");
+
+  if (error) {
+    throw new Error(`Unable to repair Google supplier domains: ${error.message}`);
+  }
+
+  const updates = ((data ?? []) as Array<{
+    id: string;
+    source: string | null;
+    supplier_domain: string | null;
+    supplier_name: string;
+  }>).flatMap((supplier) => {
+    const expectedDomain = resolveIdentitySupplierDomain({
+      source: supplier.source,
+      supplierDomain: supplier.supplier_domain,
+      supplierName: supplier.supplier_name,
+    });
+    const currentDomain = supplier.supplier_domain?.trim().toLowerCase() ?? null;
+
+    return currentDomain === expectedDomain
+      ? []
+      : [
+          {
+            id: supplier.id,
+            supplier_domain: expectedDomain,
+          },
+        ];
+  });
+
+  if (updates.length === 0) {
+    return 0;
+  }
+
+  const results = await Promise.all(
+    updates.map((update) =>
+      supabaseAdmin
+        .from("saas_suppliers")
+        .update({
+          supplier_domain: update.supplier_domain,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", update.id),
+    ),
+  );
+
+  const updateError = results.find((result) => result.error)?.error;
+
+  if (updateError) {
+    throw new Error(
+      `Unable to repair Google supplier domains: ${updateError.message}`,
+    );
+  }
+
+  return updates.length;
 }
 
-function extractDomainFromText(input: string): string | null {
-  const match = input
-    .toLowerCase()
-    .match(/\b([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b/);
-
-  return match?.[1] ?? null;
+function normalizeSupplierDisplayName(input: string | null | undefined): string {
+  return (input ?? "").replace(/\s+/g, " ").trim();
 }
 
 export async function rebuildSupplierIdentityMatches({
@@ -866,7 +941,7 @@ export async function buildIdentityDashboardRows({
   ] = await Promise.all([
     supabaseAdmin
       .from("saas_suppliers")
-      .select("id, supplier_name, supplier_domain, monthly_spend")
+      .select("id, supplier_name, supplier_domain, monthly_spend, source")
       .eq("organization_id", organizationId)
       .order("supplier_name", { ascending: true }),
     supabaseAdmin
@@ -902,13 +977,19 @@ export async function buildIdentityDashboardRows({
   const suppliers = ((suppliersResult.data ?? []) as Array<{
     id: string;
     monthly_spend: number | null;
+    source: string | null;
     supplier_domain: string | null;
     supplier_name: string;
   }>).map(
     (supplier): SupplierForIdentityMatch => ({
       id: supplier.id,
       monthlySpend: supplier.monthly_spend,
-      supplierDomain: supplier.supplier_domain,
+      source: supplier.source,
+      supplierDomain: resolveIdentitySupplierDomain({
+        source: supplier.source,
+        supplierDomain: supplier.supplier_domain,
+        supplierName: supplier.supplier_name,
+      }),
       supplierName: supplier.supplier_name,
     }),
   );

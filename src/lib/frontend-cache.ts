@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import {
   loadContractDetail,
@@ -27,6 +28,8 @@ const FRONTEND_PATHS = [
   "/app/settings/integrations",
 ] as const;
 
+const FRONTEND_CACHE_SCHEMA_VERSION = "2026-05-18.identity-domains-v2";
+
 export const frontendCacheTags = {
   contractDetail: (organizationId: string, contractId: string) =>
     `frontend:contract-detail:${organizationId}:${contractId}`,
@@ -46,13 +49,15 @@ export async function loadCachedGoogleStatus({
 }: {
   organizationId: string;
 }): Promise<GoogleStatusPayload> {
+  const version = await loadFrontendDataVersion(organizationId);
+
   return unstable_cache(
     async (cachedOrganizationId: string) =>
       loadGoogleStatus({
         organizationId: cachedOrganizationId,
         supabaseAdmin: createSupabaseAdminClient(),
       }),
-    ["frontend-google-status", organizationId],
+    ["frontend-google-status", FRONTEND_CACHE_SCHEMA_VERSION, organizationId, version],
     {
       revalidate: false,
       tags: [frontendCacheTags.googleStatus(organizationId)],
@@ -65,6 +70,8 @@ export async function loadCachedIdentitySignals({
 }: {
   organizationId: string;
 }): Promise<IdentitySignalsPayload> {
+  const version = await loadFrontendDataVersion(organizationId);
+
   return unstable_cache(
     async (cachedOrganizationId: string) =>
       loadIdentitySignals({
@@ -72,7 +79,12 @@ export async function loadCachedIdentitySignals({
         organizationId: cachedOrganizationId,
         supabaseAdmin: createSupabaseAdminClient(),
       }),
-    ["frontend-identity-signals", organizationId],
+    [
+      "frontend-identity-signals",
+      FRONTEND_CACHE_SCHEMA_VERSION,
+      organizationId,
+      version,
+    ],
     {
       revalidate: false,
       tags: [frontendCacheTags.identitySignals(organizationId)],
@@ -85,6 +97,8 @@ export async function loadCachedPennylaneStatus({
 }: {
   organizationId: string;
 }): Promise<PennylaneFrontendStatus> {
+  const version = await loadFrontendDataVersion(organizationId);
+
   return unstable_cache(
     async (cachedOrganizationId: string) =>
       loadPennylaneStatus({
@@ -92,7 +106,12 @@ export async function loadCachedPennylaneStatus({
         recoverStaleRuns: false,
         supabaseAdmin: createSupabaseAdminClient(),
       }),
-    ["frontend-pennylane-status", organizationId],
+    [
+      "frontend-pennylane-status",
+      FRONTEND_CACHE_SCHEMA_VERSION,
+      organizationId,
+      version,
+    ],
     {
       revalidate: false,
       tags: [frontendCacheTags.pennylaneStatus(organizationId)],
@@ -105,13 +124,15 @@ export async function loadCachedContracts({
 }: {
   organizationId: string;
 }): Promise<ContractRow[]> {
+  const version = await loadFrontendDataVersion(organizationId);
+
   return unstable_cache(
     async (cachedOrganizationId: string) =>
       loadContracts({
         organizationId: cachedOrganizationId,
         supabaseAdmin: createSupabaseAdminClient(),
       }),
-    ["frontend-contracts", organizationId],
+    ["frontend-contracts", FRONTEND_CACHE_SCHEMA_VERSION, organizationId, version],
     {
       revalidate: false,
       tags: [frontendCacheTags.contracts(organizationId)],
@@ -124,13 +145,20 @@ export async function loadCachedContractGaps({
 }: {
   organizationId: string;
 }): Promise<ContractGapsPayload> {
+  const version = await loadFrontendDataVersion(organizationId);
+
   return unstable_cache(
     async (cachedOrganizationId: string) =>
       loadContractGaps({
         organizationId: cachedOrganizationId,
         supabaseAdmin: createSupabaseAdminClient(),
       }),
-    ["frontend-contract-gaps", organizationId],
+    [
+      "frontend-contract-gaps",
+      FRONTEND_CACHE_SCHEMA_VERSION,
+      organizationId,
+      version,
+    ],
     {
       revalidate: false,
       tags: [frontendCacheTags.contractGaps(organizationId)],
@@ -145,6 +173,8 @@ export async function loadCachedContractDetail({
   contractId: string;
   organizationId: string;
 }): Promise<ContractDetail | null> {
+  const version = await loadFrontendDataVersion(organizationId);
+
   return unstable_cache(
     async (cachedOrganizationId: string, cachedContractId: string) =>
       loadContractDetail({
@@ -152,7 +182,13 @@ export async function loadCachedContractDetail({
         organizationId: cachedOrganizationId,
         supabaseAdmin: createSupabaseAdminClient(),
       }),
-    ["frontend-contract-detail", organizationId, contractId],
+    [
+      "frontend-contract-detail",
+      FRONTEND_CACHE_SCHEMA_VERSION,
+      organizationId,
+      contractId,
+      version,
+    ],
     {
       revalidate: false,
       tags: [
@@ -203,3 +239,59 @@ function revalidateFrontendPaths() {
     revalidatePath(path);
   }
 }
+
+const loadFrontendDataVersion = cache(
+  async (organizationId: string): Promise<string> => {
+    const supabaseAdmin = createSupabaseAdminClient();
+    const [integrationsResult, pennylaneRunResult] = await Promise.all([
+      supabaseAdmin
+        .from("integrations")
+        .select(
+          [
+            "provider",
+            "status",
+            "last_sync_started_at",
+            "last_sync_completed_at",
+            "last_error",
+            "updated_at",
+          ].join(", "),
+        )
+        .eq("organization_id", organizationId)
+        .in("provider", ["google_workspace", "pennylane"]),
+      supabaseAdmin
+        .from("pennylane_sync_runs")
+        .select("status, started_at, completed_at")
+        .eq("organization_id", organizationId)
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+    if (integrationsResult.error) {
+      throw new Error(
+        `Unable to load frontend cache version: ${integrationsResult.error.message}`,
+      );
+    }
+
+    if (pennylaneRunResult.error) {
+      throw new Error(
+        `Unable to load frontend cache version: ${pennylaneRunResult.error.message}`,
+      );
+    }
+
+    const integrations = ((integrationsResult.data ?? []) as unknown as Array<{
+      last_error: string | null;
+      last_sync_completed_at: string | null;
+      last_sync_started_at: string | null;
+      provider: string;
+      status: string | null;
+      updated_at: string | null;
+    }>).sort((left, right) => left.provider.localeCompare(right.provider));
+
+    return JSON.stringify({
+      integrations,
+      pennylaneRun: pennylaneRunResult.data ?? null,
+      schema: FRONTEND_CACHE_SCHEMA_VERSION,
+    });
+  },
+);
