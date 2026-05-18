@@ -7,22 +7,16 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 
-type DisconnectBody = {
-  deleteSyncedData?: boolean;
-};
-
 type IntegrationRow = {
-  delete_synced_data_on_disconnect: boolean;
   encrypted_access_token: string | null;
   encrypted_refresh_token: string | null;
   id: string;
 };
 
-export async function DELETE(request: Request) {
+export async function DELETE() {
   try {
     const { organizationId, userId } = await getIntegrationRequestContext();
     const supabaseAdmin = createSupabaseAdminClient();
-    const body = (await request.json().catch(() => ({}))) as DisconnectBody;
     const { data: integrationData, error: integrationError } =
       await supabaseAdmin
         .from("integrations")
@@ -31,7 +25,6 @@ export async function DELETE(request: Request) {
             "id",
             "encrypted_access_token",
             "encrypted_refresh_token",
-            "delete_synced_data_on_disconnect",
           ].join(", "),
         )
         .eq("organization_id", organizationId)
@@ -57,12 +50,7 @@ export async function DELETE(request: Request) {
       await revokeTokenBestEffort(tokenToRevoke);
     }
 
-    const shouldDeleteSyncedData =
-      body.deleteSyncedData ?? integration.delete_synced_data_on_disconnect;
-
-    if (shouldDeleteSyncedData) {
-      await deleteSyncedGoogleData({ organizationId, supabaseAdmin });
-    }
+    await deleteSyncedGoogleData({ organizationId, supabaseAdmin });
 
     await supabaseAdmin
       .from("integrations")
@@ -81,7 +69,7 @@ export async function DELETE(request: Request) {
       action: "disconnected",
       actorUserId: userId,
       integrationId: integration.id,
-      metadata: { deleteSyncedData: shouldDeleteSyncedData },
+      metadata: { deleteSyncedData: true },
       organizationId,
       provider: "google_workspace",
       supabaseAdmin,
@@ -148,5 +136,10 @@ async function deleteSyncedGoogleData({
       .from("supplier_identity_matches")
       .delete()
       .eq("organization_id", organizationId),
+    supabaseAdmin
+      .from("saas_suppliers")
+      .delete()
+      .eq("organization_id", organizationId)
+      .eq("source", "google_workspace"),
   ]);
 }
