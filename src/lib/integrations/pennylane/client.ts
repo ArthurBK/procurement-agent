@@ -4,6 +4,7 @@ export type PennylaneClientConfig = {
   apiToken?: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 };
 
 export type PennylaneListResponse<T> = {
@@ -32,6 +33,7 @@ export class PennylaneApiError extends Error {
 
 const DEFAULT_BASE_URL = "https://app.pennylane.com/api/external/v2";
 const MAX_LIMIT = 100;
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export function getPennylaneSyncLookbackMonths(): number {
   const rawValue = process.env.PENNYLANE_SYNC_LOOKBACK_MONTHS;
@@ -52,6 +54,7 @@ export class PennylaneClient {
   private readonly apiToken: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
 
   constructor(config: PennylaneClientConfig = {}) {
     this.apiToken = config.apiToken ?? requireEnv("PENNYLANE_API_TOKEN");
@@ -59,6 +62,7 @@ export class PennylaneClient {
       config.baseUrl ?? process.env.PENNYLANE_API_BASE_URL ?? DEFAULT_BASE_URL,
     );
     this.fetchImpl = config.fetchImpl ?? fetch;
+    this.timeoutMs = config.timeoutMs ?? getPennylaneApiTimeoutMs();
   }
 
   async testConnection(): Promise<Record<string, unknown>> {
@@ -108,11 +112,18 @@ export class PennylaneClient {
   }
 
   async getAttachmentBytes(attachmentUrl: string): Promise<ArrayBuffer | null> {
-    const response = await this.fetchImpl(attachmentUrl, {
-      headers: {
-        Accept: "application/pdf,application/octet-stream",
-      },
-    });
+    let response: Response;
+
+    try {
+      response = await this.fetchImpl(attachmentUrl, {
+        headers: {
+          Accept: "application/pdf,application/octet-stream",
+        },
+        signal: createTimeoutSignal(this.timeoutMs),
+      });
+    } catch {
+      return null;
+    }
 
     if (!response.ok) {
       return null;
@@ -160,12 +171,27 @@ export class PennylaneClient {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      const response = await this.fetchImpl(url, {
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${this.apiToken}`,
-        },
-      });
+      let response: Response;
+
+      try {
+        response = await this.fetchImpl(url, {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${this.apiToken}`,
+          },
+          signal: createTimeoutSignal(this.timeoutMs),
+        });
+      } catch (error) {
+        lastError = new Error(
+          isAbortError(error)
+            ? `Pennylane API request timed out after ${this.timeoutMs}ms.`
+            : `Pennylane API request failed: ${
+                error instanceof Error ? error.message : "unknown network error"
+              }`,
+        );
+        await sleep(250 * 2 ** attempt);
+        continue;
+      }
 
       if (response.ok) {
         return (await response.json()) as T;
@@ -198,6 +224,32 @@ function requireEnv(name: string): string {
 
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/$/, "");
+}
+
+export function getPennylaneApiTimeoutMs(): number {
+  const rawValue = process.env.PENNYLANE_API_TIMEOUT_MS;
+  const parsedValue = rawValue ? Number(rawValue) : DEFAULT_TIMEOUT_MS;
+
+  return Number.isFinite(parsedValue) && parsedValue > 0
+    ? Math.floor(parsedValue)
+    : DEFAULT_TIMEOUT_MS;
+}
+
+function createTimeoutSignal(timeoutMs: number): AbortSignal | undefined {
+  const timeout = (
+    AbortSignal as typeof AbortSignal & {
+      timeout?: (milliseconds: number) => AbortSignal;
+    }
+  ).timeout;
+
+  return timeout ? timeout(timeoutMs) : undefined;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.name === "TimeoutError")
+  );
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {

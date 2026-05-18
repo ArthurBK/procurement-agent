@@ -4,6 +4,7 @@ import { runPennylaneSync } from "@/lib/integrations/pennylane/sync";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 export async function POST() {
   try {

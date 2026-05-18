@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PennylaneFrontendStatus } from "@/lib/integrations/pennylane/frontendData";
 
@@ -31,7 +31,7 @@ export function PennylaneIntegrationCard({
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  async function refreshStatus() {
+  const refreshStatus = useCallback(async () => {
     const response = await fetch("/api/integrations/pennylane/status");
     const result = (await response.json()) as PennylaneFrontendStatus & {
       errors?: string[];
@@ -42,7 +42,25 @@ export function PennylaneIntegrationCard({
     }
 
     setStatus(result);
-  }
+  }, []);
+
+  useEffect(() => {
+    if (status.status !== "syncing") {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      refreshStatus()
+        .then(() => {
+          router.refresh();
+        })
+        .catch(() => undefined);
+    }, 5_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [refreshStatus, router, status.status]);
 
   async function saveKey() {
     const token = apiToken.trim();

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { recoverStalePennylaneSyncRuns } from "@/lib/integrations/pennylane/syncRunRecovery";
 import type { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 type SupabaseAdminClient = ReturnType<typeof createSupabaseAdminClient>;
@@ -37,6 +38,11 @@ export async function loadPennylaneStatus({
   organizationId: string;
   supabaseAdmin: SupabaseAdminClient;
 }): Promise<PennylaneFrontendStatus> {
+  await recoverStalePennylaneSyncRuns({
+    organizationId,
+    supabaseAdmin,
+  });
+
   const [integrationResult, latestSyncResult, invoicesResult, contractsResult] =
     await Promise.all([
       supabaseAdmin

@@ -23,6 +23,25 @@ test("PennylaneClient sends bearer token", async () => {
   assert.equal(requests[0].url, "https://example.test/api/external/v2/me");
 });
 
+test("PennylaneClient attaches a timeout signal to API requests", async () => {
+  let signal: AbortSignal | null = null;
+  const client = new PennylaneClient({
+    apiToken: "secret-token",
+    baseUrl: "https://example.test/api/external/v2",
+    fetchImpl: async (_input, init) => {
+      signal = init?.signal instanceof AbortSignal ? init.signal : null;
+
+      return Response.json({ company: { name: "Acme" } });
+    },
+    timeoutMs: 1_000,
+  });
+
+  await client.testConnection();
+
+  assert.ok(signal);
+  assert.equal((signal as AbortSignal).aborted, false);
+});
+
 test("PennylaneClient follows cursor pagination", async () => {
   const urls: string[] = [];
   const client = new PennylaneClient({

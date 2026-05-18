@@ -32,11 +32,13 @@ import { rebuildContractAppLinks } from "@/lib/contracts/matching";
 import { applyContractLifecycleStatus } from "@/lib/contracts/lifecycle";
 import { decryptSecret } from "@/lib/security/encryption";
 import {
+  getPennylaneApiTimeoutMs,
   getPennylaneLookbackStartDate,
   PennylaneClient,
   type PennylaneSupplierApiRow,
   type PennylaneSupplierInvoiceApiRow,
 } from "@/lib/integrations/pennylane/client";
+import { recoverStalePennylaneSyncRuns } from "@/lib/integrations/pennylane/syncRunRecovery";
 import type { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 type SupabaseAdminClient = ReturnType<typeof createSupabaseAdminClient>;
@@ -114,6 +116,10 @@ export async function runPennylaneSync({
   context: IntegrationRequestContext;
   supabaseAdmin: SupabaseAdminClient;
 }): Promise<{ syncRunId: string; summary: PennylaneSyncSummary; status: string }> {
+  await recoverStalePennylaneSyncRuns({
+    organizationId: context.organizationId,
+    supabaseAdmin,
+  });
   await ensureNoRunningPennylaneSync({
     organizationId: context.organizationId,
     supabaseAdmin,
@@ -806,12 +812,16 @@ async function downloadAttachmentBytes({
 async function downloadAttachmentBytesWithCurl(
   attachmentUrl: string,
 ): Promise<Buffer | null> {
+  const timeoutSeconds = Math.ceil(getPennylaneApiTimeoutMs() / 1000);
+
   for (const binary of CURL_BINARIES) {
     try {
       return await execFileBuffer(binary, [
         "-L",
         "-sS",
         "--fail",
+        "--max-time",
+        String(timeoutSeconds),
         attachmentUrl,
       ]);
     } catch {
@@ -830,6 +840,7 @@ function execFileBuffer(file: string, args: string[]): Promise<Buffer> {
       {
         encoding: "buffer",
         maxBuffer: 25 * 1024 * 1024,
+        timeout: getPennylaneApiTimeoutMs() + 1_000,
       },
       (error, stdout) => {
         if (error) {
@@ -848,7 +859,9 @@ async function runPdfToText(pdfPath: string, textPath: string): Promise<void> {
 
   for (const binary of PDF_TO_TEXT_BINARIES) {
     try {
-      await execFileAsync(binary, [pdfPath, textPath]);
+      await execFileAsync(binary, [pdfPath, textPath], {
+        timeout: getPennylaneApiTimeoutMs(),
+      });
       return;
     } catch (error) {
       lastError = error;
@@ -1058,6 +1071,7 @@ async function ensureNoRunningPennylaneSync({
     .select("id")
     .eq("organization_id", organizationId)
     .eq("status", "running")
+    .limit(1)
     .maybeSingle();
 
   if (error) {
@@ -1083,7 +1097,6 @@ async function ensurePennylaneIntegration({
         connected_by_user_id: context.userId,
         organization_id: context.organizationId,
         provider: "pennylane",
-        status: "syncing",
       },
       { onConflict: "organization_id,provider" },
     )
