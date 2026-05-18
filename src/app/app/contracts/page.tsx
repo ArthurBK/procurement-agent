@@ -25,17 +25,17 @@ export default async function ContractsPage() {
     loadContracts({ organizationId, supabaseAdmin }),
     loadContractGaps({ organizationId, supabaseAdmin }),
   ]);
-  const visibleContracts = contracts.filter((contract) => contract.linkedSsoAppName);
+  const matchedContracts = contracts.filter((contract) => contract.linkedSsoAppName);
   const visibleGaps = { ...gaps, orphanContracts: [] };
   const reviewRows = gaps.possibleMatches;
   const pipelineReviewRows = [...reviewRows, ...gaps.usageReviewContracts];
   const pipelineItems = buildPipelineItems({
-    contracts: visibleContracts,
+    contracts: matchedContracts,
     reviewRows: pipelineReviewRows,
     today: todayIso,
   });
   const summary = buildContractSummary({
-    contracts: visibleContracts,
+    contracts: matchedContracts,
     gaps: visibleGaps,
     today: todayIso,
   });
@@ -69,7 +69,10 @@ export default async function ContractsPage() {
         />
       </section>
 
-      <MatchedContractsTable contracts={visibleContracts} />
+      <MatchedContractsTable
+        contracts={contracts}
+        matchedContractsCount={matchedContracts.length}
+      />
 
       <ContractsPipeline renewals={pipelineItems} />
 
@@ -139,13 +142,34 @@ function buildPipelineItems({
   return Array.from(itemByContractId.values());
 }
 
-function MatchedContractsTable({ contracts }: { contracts: ContractRow[] }) {
+function MatchedContractsTable({
+  contracts,
+  matchedContractsCount,
+}: {
+  contracts: ContractRow[];
+  matchedContractsCount: number;
+}) {
   return (
     <section className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
       <div className="border-b border-zinc-200 px-5 py-4">
-        <h2 className="text-lg font-semibold text-zinc-950">Matched contracts</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-950">
+              Pennylane contracts
+            </h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              {matchedContractsCount} matched to Google-visible apps out of{" "}
+              {contracts.length} Pennylane contract
+              {contracts.length === 1 ? "" : "s"}.
+            </p>
+          </div>
+          <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600">
+            Runtime count: {contracts.length}
+          </span>
+        </div>
         <p className="mt-1 text-sm text-zinc-500">
-          Pennylane contracts linked to Google-visible applications.
+          SSO matching is shown as metadata; the contract list itself is not hidden by
+          identity signals.
         </p>
       </div>
       <div className="divide-y divide-zinc-100">
@@ -163,7 +187,7 @@ function MatchedContractsTable({ contracts }: { contracts: ContractRow[] }) {
                     {contract.vendorName}
                   </p>
                   <p className="truncate text-xs text-zinc-500">
-                    {contract.linkedSsoAppName}
+                    {contract.linkedSsoAppName ?? "No Google app match"}
                   </p>
                 </div>
               </div>
@@ -177,11 +201,14 @@ function MatchedContractsTable({ contracts }: { contracts: ContractRow[] }) {
                 )}
               />
               <TableMetric label="Status" value={formatEnum(contract.status)} />
-              <TableMetric label="Confidence" value={formatEnum(contract.confidence)} />
+              <TableMetric
+                label="SSO match"
+                value={contract.linkedSsoAppName ? "Matched" : "Not matched"}
+              />
             </Link>
           ))
         ) : (
-          <EmptyState value="No Pennylane contracts are currently matched to Google-visible apps." />
+          <EmptyState value="No Pennylane contracts are currently available." />
         )}
       </div>
     </section>
