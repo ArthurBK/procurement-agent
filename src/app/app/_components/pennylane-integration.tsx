@@ -6,7 +6,7 @@ import type { PennylaneFrontendStatus } from "@/lib/integrations/pennylane/front
 
 type PennylaneSyncResult = {
   status: string;
-  summary: {
+  summary?: {
     aiExtractionsAttempted: number;
     aiExtractionsSucceeded: number;
     contractsInferred: number;
@@ -15,7 +15,7 @@ type PennylaneSyncResult = {
     matchesCreated: number;
     missingContractsDetected: number;
   };
-  syncRunId: string;
+  syncRunId?: string;
 };
 
 export function PennylaneIntegrationCard({
@@ -42,6 +42,7 @@ export function PennylaneIntegrationCard({
     }
 
     setStatus(result);
+    setIsSyncing(result.status === "syncing");
   }, []);
 
   useEffect(() => {
@@ -106,6 +107,7 @@ export function PennylaneIntegrationCard({
     setActionMessage(null);
     setIsSyncing(true);
     setStatus((current) => ({ ...current, status: "syncing" }));
+    let startedAsyncSync = false;
 
     try {
       const response = await fetch("/api/integrations/pennylane/sync", {
@@ -120,15 +122,21 @@ export function PennylaneIntegrationCard({
       }
 
       setActionMessage(buildSyncMessage(result));
-      await refreshStatus();
+      startedAsyncSync = result.status === "started" || result.status === "queued";
+      if (!startedAsyncSync) {
+        await refreshStatus();
+      }
       router.refresh();
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : "Unable to sync Pennylane.",
       );
       await refreshStatus().catch(() => undefined);
-    } finally {
       setIsSyncing(false);
+    } finally {
+      if (!startedAsyncSync) {
+        setIsSyncing(false);
+      }
     }
   }
 
@@ -253,6 +261,10 @@ function formatApiKeySource(status: PennylaneFrontendStatus): string {
 }
 
 function buildSyncMessage(result: PennylaneSyncResult): string {
+  if (!result.summary) {
+    return "Pennylane sync started. This page will refresh when the run finishes.";
+  }
+
   return [
     `Synced ${result.summary.invoicesFetched} invoices`,
     `inferred ${result.summary.contractsInferred} contracts`,

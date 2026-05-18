@@ -9,7 +9,7 @@ import type {
   PennylaneInvoiceForContractExtraction,
 } from "./extraction.ts";
 
-export const AI_CONTRACT_EXTRACTION_PROMPT_VERSION = "2026-05-15.v1";
+export const AI_CONTRACT_EXTRACTION_PROMPT_VERSION = "2026-05-18.v2";
 export const AI_CONTRACT_EXTRACTION_RAW_JSON_KEY = "ai_contract_extraction";
 
 const ContractDate = z
@@ -120,6 +120,14 @@ export function buildAiContractSourceTextHash(
     .digest("hex");
 }
 
+const CONTRACT_EXTRACTION_SYSTEM_PROMPT = [
+  "Extract SaaS contract and subscription fields from Pennylane supplier invoice data.",
+  "Return only facts that are explicit in the invoice, or conservative inferences from invoice period/date history.",
+  "Do not invent cancellation terms, owners, or seat counts. Use null when a field is missing.",
+  "Amounts must be integer cents in the invoice currency. Distinguish prorata invoice totals from recurring subscription amounts.",
+  "Dates must be ISO YYYY-MM-DD. If a payment date is the renewal boundary, use that same date as nextRenewalDate.",
+].join(" ");
+
 export function shouldAttemptAiContractExtraction({
   deterministicContract,
   invoice,
@@ -216,17 +224,88 @@ export async function extractContractFieldsWithAi({
   const response = await openai.responses.parse({
     input: [
       {
-        content: [
-          "Extract SaaS contract and subscription fields from Pennylane supplier invoice text.",
-          "Return only facts that are explicit in the invoice text, or conservative inferences from invoice period/date history.",
-          "Do not invent cancellation terms, owners, or seat counts. Use null when a field is missing.",
-          "Amounts must be integer cents in the invoice currency. Distinguish prorata invoice totals from recurring subscription amounts.",
-          "Dates must be ISO YYYY-MM-DD. If a period end is the renewal boundary, use that same date as nextRenewalDate.",
-        ].join(" "),
+        content: CONTRACT_EXTRACTION_SYSTEM_PROMPT,
         role: "system",
       },
       {
         content: buildAiContractSourceText(invoice),
+        role: "user",
+      },
+    ],
+    model,
+    text: {
+      format: zodTextFormat(
+        AiContractExtractionSchema,
+        "contract_subscription_extraction",
+      ),
+    },
+  });
+  const fields = response.output_parsed;
+
+  if (!fields) {
+    throw new Error("OpenAI returned no structured contract extraction.");
+  }
+
+  return {
+    fields,
+    metadata: {
+      extracted_at: new Date().toISOString(),
+      extracted_fields: fields,
+      model,
+      prompt_version: AI_CONTRACT_EXTRACTION_PROMPT_VERSION,
+      provider: "openai",
+      source_text_hash: buildAiContractSourceTextHash(invoice),
+    },
+  };
+}
+
+export async function extractContractFieldsFromPdfWithAi({
+  client,
+  filename,
+  invoice,
+  model = getAiContractExtractionModel(),
+  pdfBytes,
+}: {
+  client?: OpenAI;
+  filename?: string | null;
+  invoice: PennylaneInvoiceForContractExtraction;
+  model?: string;
+  pdfBytes: Buffer | Uint8Array;
+}): Promise<AiContractExtractionResult> {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!client && !apiKey) {
+    throw new Error("OPENAI_API_KEY is required when AI contract extraction is enabled.");
+  }
+
+  assertPdfSizeAllowed(pdfBytes);
+
+  const openai = client ?? new OpenAI({ apiKey });
+  const response = await openai.responses.parse({
+    input: [
+      {
+        content: CONTRACT_EXTRACTION_SYSTEM_PROMPT,
+        role: "system",
+      },
+      {
+        content: [
+          {
+            text: [
+              "Extract SaaS contract and subscription fields from the attached PDF invoice.",
+              "Use the Pennylane metadata below only as supporting context.",
+              buildAiContractSourceText(invoice),
+            ].join("\n\n"),
+            type: "input_text" as const,
+          },
+          {
+            detail: "high" as const,
+            file_data: `data:application/pdf;base64,${Buffer.from(pdfBytes).toString(
+              "base64",
+            )}`,
+            filename: sanitizePdfFilename(filename ?? invoice.invoiceNumber),
+            type: "input_file" as const,
+          },
+        ],
         role: "user",
       },
     ],
@@ -300,6 +379,35 @@ function isTruthy(value: string | undefined): boolean {
   const normalized = value?.toLowerCase();
 
   return value === "1" || normalized === "true" || normalized === "yes";
+}
+
+function assertPdfSizeAllowed(pdfBytes: Buffer | Uint8Array) {
+  const defaultMaxBytes = 20 * 1024 * 1024;
+  const rawValue = process.env.PENNYLANE_AI_PDF_MAX_BYTES;
+  const parsedValue = rawValue ? Number(rawValue) : NaN;
+  const maxBytes =
+    Number.isFinite(parsedValue) && parsedValue > 0
+      ? Math.floor(parsedValue)
+      : defaultMaxBytes;
+
+  if (pdfBytes.byteLength > maxBytes) {
+    throw new Error(
+      `PDF is too large for AI contract extraction (${pdfBytes.byteLength} bytes, max ${maxBytes}).`,
+    );
+  }
+}
+
+function sanitizePdfFilename(value: string | null | undefined): string {
+  const filename = value
+    ?.trim()
+    .replace(/[^a-z0-9_.-]+/gi, "-")
+    .replace(/^-+|-+$/g, "");
+
+  if (!filename) {
+    return "pennylane-invoice.pdf";
+  }
+
+  return filename.toLowerCase().endsWith(".pdf") ? filename : `${filename}.pdf`;
 }
 
 const AiContractExtractionMetadataSchema = z

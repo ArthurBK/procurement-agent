@@ -1,15 +1,11 @@
-import "server-only";
-
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { createIntegrationAuditLog } from "@/lib/integrations/audit";
-import {
-  DEFAULT_ACTOR_USER_ID,
-  type IntegrationRequestContext,
-} from "@/lib/integrations/context";
+import { DEFAULT_ACTOR_USER_ID } from "@/lib/auth/constants";
+import type { IntegrationRequestContext } from "@/lib/auth/types";
 import {
   buildInvoiceSourceHash,
   inferContractsFromPennylaneInvoices,
@@ -20,6 +16,7 @@ import {
   AI_CONTRACT_EXTRACTION_RAW_JSON_KEY,
   buildAiContractExtractionErrorMetadata,
   buildAiContractSourceTextHash,
+  extractContractFieldsFromPdfWithAi,
   extractContractFieldsWithAi,
   getAiContractExtractionMetadata,
   getAiContractExtractionModel,
@@ -38,6 +35,11 @@ import {
   type PennylaneSupplierApiRow,
   type PennylaneSupplierInvoiceApiRow,
 } from "@/lib/integrations/pennylane/client";
+import {
+  PdfTextExtractionError,
+  extractPdfTextWithPdfJs,
+  isPdfTextExtractionUnavailableError,
+} from "@/lib/integrations/pennylane/pdfText";
 import { recoverStalePennylaneSyncRuns } from "@/lib/integrations/pennylane/syncRunRecovery";
 import type { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -70,6 +72,8 @@ type PennylaneInvoiceDbRow = {
   supplier_name: string;
 };
 
+const DEFAULT_AI_EXTRACTION_MAX_ATTEMPTS_PER_SYNC = 8;
+
 const execFileAsync = promisify(execFile);
 const PDF_TO_TEXT_BINARIES = [
   "pdftotext",
@@ -90,6 +94,11 @@ export type PennylaneSyncSummary = {
   aiExtractionsReused: number;
   aiExtractionsSkipped: number;
   aiExtractionsSucceeded: number;
+  aiPdfExtractionsAttempted: number;
+  aiPdfExtractionsFailed: number;
+  aiPdfExtractionsReused: number;
+  aiPdfExtractionsSkipped: number;
+  aiPdfExtractionsSucceeded: number;
   contractsInferred: number;
   errors: string[];
   invoicesCreated: number;
@@ -189,13 +198,26 @@ export async function runPennylaneSync({
     const upsertedInvoices = upsertedInvoiceResult.rows;
     const extractionInvoices = upsertedInvoices.map(toExtractionInvoice);
     const firstPassContracts = inferContractsFromPennylaneInvoices(extractionInvoices);
-    const aiExtractionResult = await enhanceInvoicesWithAiExtraction({
+    const aiPdfExtractionResult = await enhanceInvoicesWithAiPdfExtraction({
+      client: pennylaneClient,
       contracts: firstPassContracts,
       invoices: extractionInvoices,
       supabaseAdmin,
     });
+    const contractsAfterPdfAi =
+      aiPdfExtractionResult.succeeded > 0 || aiPdfExtractionResult.failed > 0
+        ? inferContractsFromPennylaneInvoices(aiPdfExtractionResult.invoices)
+        : firstPassContracts;
+    const aiExtractionResult = await enhanceInvoicesWithAiExtraction({
+      contracts: contractsAfterPdfAi,
+      invoices: aiPdfExtractionResult.invoices,
+      supabaseAdmin,
+    });
     const inferredContracts =
-      aiExtractionResult.succeeded > 0 || aiExtractionResult.failed > 0
+      aiPdfExtractionResult.succeeded > 0 ||
+      aiPdfExtractionResult.failed > 0 ||
+      aiExtractionResult.succeeded > 0 ||
+      aiExtractionResult.failed > 0
         ? inferContractsFromPennylaneInvoices(aiExtractionResult.invoices)
         : firstPassContracts;
     const lifecycleContracts = inferredContracts.map((contract) =>
@@ -223,6 +245,11 @@ export async function runPennylaneSync({
       aiExtractionsReused: aiExtractionResult.reused,
       aiExtractionsSkipped: aiExtractionResult.skipped,
       aiExtractionsSucceeded: aiExtractionResult.succeeded,
+      aiPdfExtractionsAttempted: aiPdfExtractionResult.attempted,
+      aiPdfExtractionsFailed: aiPdfExtractionResult.failed,
+      aiPdfExtractionsReused: aiPdfExtractionResult.reused,
+      aiPdfExtractionsSkipped: aiPdfExtractionResult.skipped,
+      aiPdfExtractionsSucceeded: aiPdfExtractionResult.succeeded,
       contractsInferred: contractsUpserted,
       errors: normalizedInvoices.errors,
       invoicesCreated: upsertedInvoiceResult.createdCount,
@@ -240,6 +267,7 @@ export async function runPennylaneSync({
       warnings: [
         ...enrichmentResult.warnings,
         ...normalizedInvoices.warnings,
+        ...aiPdfExtractionResult.warnings,
         ...aiExtractionResult.warnings,
       ],
     };
@@ -278,6 +306,11 @@ export async function runPennylaneSync({
       aiExtractionsReused: 0,
       aiExtractionsSkipped: 0,
       aiExtractionsSucceeded: 0,
+      aiPdfExtractionsAttempted: 0,
+      aiPdfExtractionsFailed: 0,
+      aiPdfExtractionsReused: 0,
+      aiPdfExtractionsSkipped: 0,
+      aiPdfExtractionsSucceeded: 0,
       contractsInferred: 0,
       errors: [message],
       invoicesCreated: 0,
@@ -534,7 +567,10 @@ async function enrichInvoicesWithDetails({
       } catch (error) {
         pdfTextExtractionsFailed += 1;
 
-        if (isPdfToTextUnavailableError(error)) {
+        if (
+          isPdfTextExtractionUnavailableError(error) ||
+          isPdfToTextUnavailableError(error)
+        ) {
           pdfTextExtractionUnavailable = true;
           warnings.push(
             "PDF text extraction is unavailable in this runtime; using Pennylane metadata and AI fallback.",
@@ -563,6 +599,152 @@ async function enrichInvoicesWithDetails({
   };
 }
 
+async function enhanceInvoicesWithAiPdfExtraction({
+  client,
+  contracts,
+  invoices,
+  supabaseAdmin,
+}: {
+  client: PennylaneClient;
+  contracts: InferredContract[];
+  invoices: PennylaneInvoiceForContractExtraction[];
+  supabaseAdmin: SupabaseAdminClient;
+}): Promise<{
+  attempted: number;
+  failed: number;
+  invoices: PennylaneInvoiceForContractExtraction[];
+  reused: number;
+  skipped: number;
+  succeeded: number;
+  warnings: string[];
+}> {
+  const warnings: string[] = [];
+  const aiEnabled = isAiContractExtractionEnabled();
+  const apiKey = process.env.OPENAI_API_KEY;
+  const maxAttempts = getPennylaneAiPdfExtractionMaxAttemptsPerSync();
+  const model = getAiContractExtractionModel();
+  const contractByLatestInvoiceExternalId = new Map(
+    contracts.map((contract) => [contract.sourceDocumentExternalId, contract]),
+  );
+  let attempted = 0;
+  let failed = 0;
+  let limitWarningAdded = false;
+  let missingApiKeyWarningAdded = false;
+  let reused = 0;
+  let skipped = 0;
+  let succeeded = 0;
+  const enhancedInvoices: PennylaneInvoiceForContractExtraction[] = [];
+
+  for (const invoice of invoices) {
+    const sourceHash = buildAiContractSourceTextHash(invoice);
+    const cached = getAiContractExtractionMetadata(invoice.rawJson);
+
+    if (cached?.source_text_hash === sourceHash && cached.extracted_fields) {
+      reused += 1;
+      enhancedInvoices.push(invoice);
+      continue;
+    }
+
+    if (hasCachedPdfText(invoice.rawJson) || !getInvoiceAttachmentUrl(invoice.rawJson)) {
+      skipped += 1;
+      enhancedInvoices.push(invoice);
+      continue;
+    }
+
+    const deterministicContract =
+      contractByLatestInvoiceExternalId.get(invoice.externalId) ?? null;
+    const decision = shouldAttemptAiContractExtraction({
+      deterministicContract,
+      invoice,
+    });
+    const shouldAttemptFromPdf =
+      decision.shouldAttempt ||
+      decision.reason === "not_enough_invoice_text" ||
+      !deterministicContract;
+
+    if (!shouldAttemptFromPdf) {
+      skipped += 1;
+      enhancedInvoices.push(invoice);
+      continue;
+    }
+
+    if (!aiEnabled || !apiKey) {
+      if (aiEnabled && !apiKey && !missingApiKeyWarningAdded) {
+        warnings.push(
+          "AI PDF contract extraction is enabled but OPENAI_API_KEY is missing; skipped PDF AI fallback.",
+        );
+        missingApiKeyWarningAdded = true;
+      }
+
+      skipped += 1;
+      enhancedInvoices.push(invoice);
+      continue;
+    }
+
+    if (attempted >= maxAttempts) {
+      if (!limitWarningAdded) {
+        warnings.push(
+          `AI PDF contract extraction limit reached (${maxAttempts} per sync); remaining invoices used deterministic extraction.`,
+        );
+        limitWarningAdded = true;
+      }
+
+      skipped += 1;
+      enhancedInvoices.push(invoice);
+      continue;
+    }
+
+    attempted += 1;
+
+    try {
+      const attachmentUrl = getInvoiceAttachmentUrl(invoice.rawJson);
+      const pdfBytes = attachmentUrl
+        ? await downloadAttachmentBytes({ attachmentUrl, client })
+        : null;
+
+      if (!pdfBytes) {
+        throw new Error("Attachment download returned no PDF bytes.");
+      }
+
+      const result = await extractContractFieldsFromPdfWithAi({
+        filename: getInvoicePdfFilename(invoice.rawJson),
+        invoice,
+        model,
+        pdfBytes,
+      });
+      const enhancedInvoice = withAiExtractionMetadata(invoice, result.metadata);
+      await persistInvoiceAiMetadata({ invoice: enhancedInvoice, supabaseAdmin });
+      enhancedInvoices.push(enhancedInvoice);
+      succeeded += 1;
+    } catch (error) {
+      const metadata = buildAiContractExtractionErrorMetadata({
+        error,
+        invoice,
+        model,
+      });
+      const enhancedInvoice = withAiExtractionMetadata(invoice, metadata);
+      await persistInvoiceAiMetadata({ invoice: enhancedInvoice, supabaseAdmin });
+      enhancedInvoices.push(enhancedInvoice);
+      failed += 1;
+      warnings.push(
+        `AI PDF contract extraction failed for Pennylane invoice ${invoice.externalId}: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`,
+      );
+    }
+  }
+
+  return {
+    attempted,
+    failed,
+    invoices: enhancedInvoices,
+    reused,
+    skipped,
+    succeeded,
+    warnings,
+  };
+}
+
 async function enhanceInvoicesWithAiExtraction({
   contracts,
   invoices,
@@ -583,12 +765,14 @@ async function enhanceInvoicesWithAiExtraction({
   const warnings: string[] = [];
   const aiEnabled = isAiContractExtractionEnabled();
   const apiKey = process.env.OPENAI_API_KEY;
+  const maxAttempts = getPennylaneAiExtractionMaxAttemptsPerSync();
   const model = getAiContractExtractionModel();
   const contractByLatestInvoiceExternalId = new Map(
     contracts.map((contract) => [contract.sourceDocumentExternalId, contract]),
   );
   let attempted = 0;
   let failed = 0;
+  let limitWarningAdded = false;
   let reused = 0;
   let skipped = 0;
   let succeeded = 0;
@@ -621,6 +805,19 @@ async function enhanceInvoicesWithAiExtraction({
     }
 
     if (!decision.shouldAttempt || !aiEnabled || !apiKey) {
+      skipped += 1;
+      enhancedInvoices.push(invoice);
+      continue;
+    }
+
+    if (attempted >= maxAttempts) {
+      if (!limitWarningAdded) {
+        warnings.push(
+          `AI contract extraction limit reached (${maxAttempts} per sync); remaining invoices used deterministic extraction.`,
+        );
+        limitWarningAdded = true;
+      }
+
       skipped += 1;
       enhancedInvoices.push(invoice);
       continue;
@@ -664,6 +861,28 @@ async function enhanceInvoicesWithAiExtraction({
     succeeded,
     warnings,
   };
+}
+
+function getPennylaneAiExtractionMaxAttemptsPerSync(): number {
+  const rawValue = process.env.PENNYLANE_AI_EXTRACTION_MAX_ATTEMPTS_PER_SYNC;
+  const parsedValue = rawValue
+    ? Number(rawValue)
+    : DEFAULT_AI_EXTRACTION_MAX_ATTEMPTS_PER_SYNC;
+
+  return Number.isFinite(parsedValue) && parsedValue >= 0
+    ? Math.floor(parsedValue)
+    : DEFAULT_AI_EXTRACTION_MAX_ATTEMPTS_PER_SYNC;
+}
+
+function getPennylaneAiPdfExtractionMaxAttemptsPerSync(): number {
+  const rawValue = process.env.PENNYLANE_AI_PDF_EXTRACTION_MAX_ATTEMPTS_PER_SYNC;
+  const parsedValue = rawValue
+    ? Number(rawValue)
+    : DEFAULT_AI_EXTRACTION_MAX_ATTEMPTS_PER_SYNC;
+
+  return Number.isFinite(parsedValue) && parsedValue >= 0
+    ? Math.floor(parsedValue)
+    : DEFAULT_AI_EXTRACTION_MAX_ATTEMPTS_PER_SYNC;
 }
 
 function withAiExtractionMetadata(
@@ -757,13 +976,7 @@ async function extractPdfTextFromInvoice({
   client: PennylaneClient;
   invoice: PennylaneSupplierInvoiceApiRow;
 }): Promise<string | null> {
-  const attachmentUrl = extractString(invoice, [
-    "public_file_url",
-    "file_url",
-    "attachment_url",
-    "document_url",
-    "pdf_url",
-  ]);
+  const attachmentUrl = getInvoiceAttachmentUrl(invoice);
 
   if (!attachmentUrl) {
     return null;
@@ -775,6 +988,56 @@ async function extractPdfTextFromInvoice({
     throw new Error("Attachment download returned no PDF bytes.");
   }
 
+  let pdfJsError: unknown;
+
+  try {
+    const result = await extractPdfTextWithPdfJs(bytes);
+
+    return result.text;
+  } catch (error) {
+    if (error instanceof PdfTextExtractionError && error.code === "empty_pdf") {
+      return null;
+    }
+
+    pdfJsError = error;
+  }
+
+  try {
+    return await extractPdfTextWithPdftotext(bytes);
+  } catch (error) {
+    if (isPdfToTextUnavailableError(error) && pdfJsError) {
+      throw pdfJsError;
+    }
+
+    throw error;
+  }
+}
+
+function getInvoiceAttachmentUrl(value: Record<string, unknown>): string | null {
+  return extractString(value, [
+    "public_file_url",
+    "file_url",
+    "attachment_url",
+    "document_url",
+    "pdf_url",
+  ]);
+}
+
+function getInvoicePdfFilename(value: Record<string, unknown>): string | null {
+  return extractString(value, [
+    "filename",
+    "file_name",
+    "document_filename",
+    "attachment_filename",
+    "invoice_number",
+  ]);
+}
+
+function hasCachedPdfText(value: Record<string, unknown>): boolean {
+  return typeof value.pdf_text === "string" && value.pdf_text.trim().length > 0;
+}
+
+async function extractPdfTextWithPdftotext(bytes: Buffer): Promise<string | null> {
   const directory = await mkdtemp(join(tmpdir(), "pennylane-pdf-"));
   const pdfPath = join(directory, "source.pdf");
   const textPath = join(directory, "source.txt");

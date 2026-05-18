@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type PennylaneSyncResult = {
   status: string;
-  summary: {
+  summary?: {
     aiExtractionsAttempted: number;
     aiExtractionsFailed: number;
     aiExtractionsReused: number;
@@ -23,7 +23,7 @@ type PennylaneSyncResult = {
     suppliersFetched: number;
     warnings: string[];
   };
-  syncRunId: string;
+  syncRunId?: string;
 };
 
 export function SyncPennylaneButton({
@@ -32,9 +32,39 @@ export function SyncPennylaneButton({
   disabled?: boolean;
 }) {
   const router = useRouter();
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(disabled);
   const [result, setResult] = useState<PennylaneSyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const refreshSyncStatus = useCallback(async () => {
+    const response = await fetch("/api/integrations/pennylane/status");
+    const payload = (await response.json()) as { errors?: string[]; status?: string };
+
+    if (!response.ok) {
+      throw new Error(payload.errors?.[0] ?? "Unable to load Pennylane status.");
+    }
+
+    const stillSyncing = payload.status === "syncing";
+    setIsSyncing(stillSyncing);
+
+    if (!stillSyncing) {
+      router.refresh();
+    }
+  }, [router]);
+
+  useEffect(() => {
+    if (!isSyncing && !disabled) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      refreshSyncStatus().catch(() => undefined);
+    }, 5_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [disabled, isSyncing, refreshSyncStatus]);
 
   async function runSync() {
     setError(null);
@@ -52,12 +82,13 @@ export function SyncPennylaneButton({
       }
 
       setResult(payload);
-      router.refresh();
+      if (payload.status !== "started" && payload.status !== "queued") {
+        router.refresh();
+      }
     } catch (syncError) {
       setError(
         syncError instanceof Error ? syncError.message : "Unable to sync Pennylane.",
       );
-    } finally {
       setIsSyncing(false);
     }
   }
@@ -70,7 +101,7 @@ export function SyncPennylaneButton({
         onClick={runSync}
         type="button"
       >
-        {isSyncing ? "Syncing Pennylane..." : "Sync Pennylane"}
+        {disabled || isSyncing ? "Syncing Pennylane..." : "Sync Pennylane"}
       </button>
 
       {error ? (
@@ -81,15 +112,27 @@ export function SyncPennylaneButton({
 
       {result ? (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          Synced {result.summary.invoicesFetched} invoices, inferred{" "}
-          {result.summary.contractsInferred} contracts, created{" "}
-          {result.summary.matchesCreated} matches, detected{" "}
-          {result.summary.missingContractsDetected} missing contracts.
-          {result.summary.aiExtractionsAttempted > 0
-            ? ` AI extracted ${result.summary.aiExtractionsSucceeded}/${result.summary.aiExtractionsAttempted} ambiguous invoices.`
-            : ""}
+          {buildSyncMessage(result)}
         </div>
       ) : null}
     </div>
   );
+}
+
+function buildSyncMessage(result: PennylaneSyncResult): string {
+  if (!result.summary) {
+    return "Pennylane sync started. This page will refresh when the run finishes.";
+  }
+
+  return [
+    `Synced ${result.summary.invoicesFetched} invoices`,
+    `inferred ${result.summary.contractsInferred} contracts`,
+    `created ${result.summary.matchesCreated} matches`,
+    `detected ${result.summary.missingContractsDetected} missing contracts`,
+    result.summary.aiExtractionsAttempted > 0
+      ? `AI extracted ${result.summary.aiExtractionsSucceeded}/${result.summary.aiExtractionsAttempted} ambiguous invoices`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
