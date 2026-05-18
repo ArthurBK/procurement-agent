@@ -1,4 +1,5 @@
 import { authContextErrorToResponse } from "@/lib/auth/workspace-core";
+import { revalidatePennylaneFrontendCache } from "@/lib/frontend-cache";
 import { createIntegrationAuditLog } from "@/lib/integrations/audit";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
 import { PennylaneApiError, PennylaneClient } from "@/lib/integrations/pennylane/client";
@@ -68,6 +69,7 @@ export async function POST(request: Request) {
       provider: "pennylane",
       supabaseAdmin,
     });
+    revalidatePennylaneFrontendCache(context.organizationId);
 
     const status = await loadPennylaneStatus({
       organizationId: context.organizationId,

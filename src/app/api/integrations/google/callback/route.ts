@@ -1,5 +1,6 @@
 import { addSeconds } from "date-fns";
 import type { NextRequest } from "next/server";
+import { revalidateGoogleFrontendCache } from "@/lib/frontend-cache";
 import { createIntegrationAuditLog } from "@/lib/integrations/audit";
 import { getGoogleTokenInfo } from "@/lib/integrations/google/api";
 import {
@@ -155,9 +156,12 @@ export async function GET(request: NextRequest) {
         provider: "google_workspace",
         supabaseAdmin,
       });
+      revalidateGoogleFrontendCache(oauthState.organization_id);
 
       return redirectToGooglePage(request, "permission_smoke_test_failed");
     }
+
+    revalidateGoogleFrontendCache(oauthState.organization_id);
 
     return redirectToGooglePage(request, null, "connected");
   } catch (error) {
@@ -196,6 +200,7 @@ async function upsertFailedIntegration({
     },
     { onConflict: "organization_id,provider" },
   );
+  revalidateGoogleFrontendCache(organizationId);
 }
 
 function redirectToGooglePage(

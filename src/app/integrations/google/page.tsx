@@ -4,21 +4,19 @@ import {
   GoogleWorkspaceIntegrationCard,
   IdentitySignalsDashboard,
 } from "@/app/app/_components/google-workspace";
-import { getIntegrationRequestContext } from "@/lib/integrations/context";
 import {
-  loadGoogleStatus,
-  loadIdentitySignals,
-} from "@/lib/integrations/google/frontendData";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+  loadCachedGoogleStatus,
+  loadCachedIdentitySignals,
+} from "@/lib/frontend-cache";
+import { getIntegrationRequestContext } from "@/lib/integrations/context";
 
 export default async function GoogleWorkspaceIntegrationPage() {
   await connection();
 
   const { organizationId } = await getIntegrationRequestContext();
-  const supabaseAdmin = createSupabaseAdminClient();
   const [googleStatus, identitySignals] = await Promise.all([
-    loadGoogleStatus({ organizationId, supabaseAdmin }),
-    loadIdentitySignals({ organizationId, supabaseAdmin }),
+    loadCachedGoogleStatus({ organizationId }),
+    loadCachedIdentitySignals({ organizationId }),
   ]);
 
   return (

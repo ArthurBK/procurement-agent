@@ -1,4 +1,5 @@
 import { authContextErrorToResponse } from "@/lib/auth/workspace-core";
+import { revalidateGoogleFrontendCache } from "@/lib/frontend-cache";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
 import { runGoogleWorkspaceSync } from "@/lib/integrations/google/sync";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -12,6 +13,7 @@ export async function POST() {
       organizationId,
       supabaseAdmin: createSupabaseAdminClient(),
     });
+    revalidateGoogleFrontendCache(organizationId);
 
     return Response.json({ summary });
   } catch (error) {

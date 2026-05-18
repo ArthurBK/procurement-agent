@@ -18,6 +18,7 @@ import {
   googleApiFetchJson,
   type GoogleIntegrationRow,
 } from "@/lib/integrations/google/api";
+import { autoEnrichIdentitySupplierLogos } from "@/lib/integrations/google/identityLogoEnrichment";
 import {
   normalizeAuthorizedAppsReport,
   normalizeLoginActivity,
@@ -185,6 +186,11 @@ export async function runGoogleWorkspaceSync({
       organizationId,
       supabaseAdmin,
     });
+
+    await autoEnrichIdentitySupplierLogos({
+      organizationId,
+      supabaseAdmin,
+    }).catch(() => undefined);
 
     await pruneRawEvents({ organizationId, retentionDays, supabaseAdmin });
     const suppliersMatched = await rebuildSupplierIdentityMatches({

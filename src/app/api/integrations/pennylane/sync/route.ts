@@ -1,4 +1,5 @@
 import { authContextErrorToResponse } from "@/lib/auth/workspace-core";
+import { revalidatePennylaneFrontendCache } from "@/lib/frontend-cache";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
 import { runPennylaneSync } from "@/lib/integrations/pennylane/sync";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -8,10 +9,12 @@ export const maxDuration = 300;
 
 export async function POST() {
   try {
+    const context = await getIntegrationRequestContext();
     const result = await runPennylaneSync({
-      context: await getIntegrationRequestContext(),
+      context,
       supabaseAdmin: createSupabaseAdminClient(),
     });
+    revalidatePennylaneFrontendCache(context.organizationId);
     const status = result.status === "failed" ? 500 : 200;
 
     return Response.json(result, { status });

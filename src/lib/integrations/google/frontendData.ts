@@ -263,16 +263,20 @@ export async function loadGoogleStatus({
 }
 
 export async function loadIdentitySignals({
+  autoEnrichLogos = true,
   organizationId,
   supabaseAdmin,
 }: {
+  autoEnrichLogos?: boolean;
   organizationId: string;
   supabaseAdmin: SupabaseAdminClient;
 }): Promise<IdentitySignalsPayload> {
-  await autoEnrichIdentitySupplierLogos({
-    organizationId,
-    supabaseAdmin,
-  }).catch(() => undefined);
+  if (autoEnrichLogos) {
+    await autoEnrichIdentitySupplierLogos({
+      organizationId,
+      supabaseAdmin,
+    }).catch(() => undefined);
+  }
 
   const [
     usersResult,

@@ -48,6 +48,7 @@ export async function AppShell({
                   className="whitespace-nowrap rounded-md px-3 py-2 hover:bg-zinc-100 hover:text-zinc-950"
                   href={item.href}
                   key={item.href}
+                  prefetch
                 >
                   {item.label}
                 </Link>

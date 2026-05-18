@@ -2,10 +2,11 @@ import { connection } from "next/server";
 import { AppShell } from "@/app/app/_components/app-shell";
 import { GoogleWorkspaceIntegrationCard } from "@/app/app/_components/google-workspace";
 import { PennylaneIntegrationCard } from "@/app/app/_components/pennylane-integration";
+import {
+  loadCachedGoogleStatus,
+  loadCachedPennylaneStatus,
+} from "@/lib/frontend-cache";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
-import { loadGoogleStatus } from "@/lib/integrations/google/frontendData";
-import { loadPennylaneStatus } from "@/lib/integrations/pennylane/frontendData";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export default async function IntegrationsPage({
   searchParams,
@@ -15,15 +16,12 @@ export default async function IntegrationsPage({
   await connection();
 
   const { organizationId } = await getIntegrationRequestContext();
-  const supabaseAdmin = createSupabaseAdminClient();
   const [googleStatus, pennylaneStatus] = await Promise.all([
-    loadGoogleStatus({
+    loadCachedGoogleStatus({
       organizationId,
-      supabaseAdmin,
     }),
-    loadPennylaneStatus({
+    loadCachedPennylaneStatus({
       organizationId,
-      supabaseAdmin,
     }),
   ]);
   const resolvedSearchParams = await searchParams;

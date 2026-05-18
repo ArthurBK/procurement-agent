@@ -4,29 +4,29 @@ import { AppShell } from "@/app/app/_components/app-shell";
 import { ContractsPipeline } from "@/app/app/contracts/_components/contracts-pipeline";
 import { SyncPennylaneButton } from "@/app/app/contracts/_components/sync-pennylane-button";
 import {
+  loadCachedContractGaps,
+  loadCachedContracts,
+  loadCachedPennylaneStatus,
+} from "@/lib/frontend-cache";
+import {
   buildContractSummary,
   getContractRecommendedAction,
   getUsageContext,
-  loadContractGaps,
-  loadContracts,
   type ContractRow,
   type ContractGapRow,
 } from "@/lib/contracts/frontendData";
-import { loadPennylaneStatus } from "@/lib/integrations/pennylane/frontendData";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export default async function ContractsPage() {
   await connection();
 
   const { organizationId } = await getIntegrationRequestContext();
-  const supabaseAdmin = createSupabaseAdminClient();
   const today = new Date();
   const todayIso = today.toISOString().slice(0, 10);
   const [contracts, gaps, pennylaneStatus] = await Promise.all([
-    loadContracts({ organizationId, supabaseAdmin }),
-    loadContractGaps({ organizationId, supabaseAdmin }),
-    loadPennylaneStatus({ organizationId, supabaseAdmin }),
+    loadCachedContracts({ organizationId }),
+    loadCachedContractGaps({ organizationId }),
+    loadCachedPennylaneStatus({ organizationId }),
   ]);
   const matchedContracts = contracts.filter((contract) => contract.linkedSsoAppName);
   const visibleGaps = { ...gaps, orphanContracts: [] };

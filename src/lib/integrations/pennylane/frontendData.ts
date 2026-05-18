@@ -33,15 +33,19 @@ type PennylaneSyncRunRow = {
 
 export async function loadPennylaneStatus({
   organizationId,
+  recoverStaleRuns = true,
   supabaseAdmin,
 }: {
   organizationId: string;
+  recoverStaleRuns?: boolean;
   supabaseAdmin: SupabaseAdminClient;
 }): Promise<PennylaneFrontendStatus> {
-  await recoverStalePennylaneSyncRuns({
-    organizationId,
-    supabaseAdmin,
-  });
+  if (recoverStaleRuns) {
+    await recoverStalePennylaneSyncRuns({
+      organizationId,
+      supabaseAdmin,
+    });
+  }
 
   const [integrationResult, latestSyncResult, invoicesResult, contractsResult] =
     await Promise.all([

@@ -1,5 +1,6 @@
 import { authContextErrorToResponse } from "@/lib/auth/workspace-core";
 import { rebuildContractAppLinks } from "@/lib/contracts/matching";
+import { revalidateContractsFrontendCache } from "@/lib/frontend-cache";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -61,6 +62,7 @@ export async function PATCH(
     }
 
     await rebuildContractAppLinks({ organizationId, supabaseAdmin });
+    revalidateContractsFrontendCache(organizationId);
 
     return Response.json({ link: data });
   } catch (error) {

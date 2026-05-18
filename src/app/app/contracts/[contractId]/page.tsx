@@ -2,12 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { AppShell } from "@/app/app/_components/app-shell";
-import {
-  loadContractDetail,
-  type ContractDetail,
-} from "@/lib/contracts/frontendData";
+import { loadCachedContractDetail } from "@/lib/frontend-cache";
+import type { ContractDetail } from "@/lib/contracts/frontendData";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export default async function ContractDetailPage({
   params,
@@ -18,10 +15,9 @@ export default async function ContractDetailPage({
 
   const { contractId } = await params;
   const { organizationId } = await getIntegrationRequestContext();
-  const contract = await loadContractDetail({
+  const contract = await loadCachedContractDetail({
     contractId,
     organizationId,
-    supabaseAdmin: createSupabaseAdminClient(),
   });
 
   if (!contract) {

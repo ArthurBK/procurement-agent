@@ -1,4 +1,5 @@
 import { authContextErrorToResponse } from "@/lib/auth/workspace-core";
+import { revalidateGoogleFrontendCache } from "@/lib/frontend-cache";
 import { createIntegrationAuditLog } from "@/lib/integrations/audit";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
 import { revokeGoogleToken } from "@/lib/integrations/google/oauth";
@@ -74,6 +75,7 @@ export async function DELETE() {
       provider: "google_workspace",
       supabaseAdmin,
     });
+    revalidateGoogleFrontendCache(organizationId);
 
     return Response.json({ status: "disconnected" });
   } catch (error) {
