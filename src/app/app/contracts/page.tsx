@@ -1,5 +1,5 @@
-import { addDays, subDays } from "date-fns";
 import { connection } from "next/server";
+import Link from "next/link";
 import { AppShell } from "@/app/app/_components/app-shell";
 import { ContractsPipeline } from "@/app/app/contracts/_components/contracts-pipeline";
 import {
@@ -8,10 +8,8 @@ import {
   getUsageContext,
   loadContractGaps,
   loadContracts,
-  loadRenewals,
   type ContractRow,
   type ContractGapRow,
-  type RenewalRow,
 } from "@/lib/contracts/frontendData";
 import { getIntegrationRequestContext } from "@/lib/integrations/context";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -23,21 +21,16 @@ export default async function ContractsPage() {
   const supabaseAdmin = createSupabaseAdminClient();
   const today = new Date();
   const todayIso = today.toISOString().slice(0, 10);
-  const from = subDays(today, 28).toISOString().slice(0, 10);
-  const to = addDays(today, 119).toISOString().slice(0, 10);
-  const [contracts, gaps, renewals] = await Promise.all([
+  const [contracts, gaps] = await Promise.all([
     loadContracts({ organizationId, supabaseAdmin }),
     loadContractGaps({ organizationId, supabaseAdmin }),
-    loadRenewals({ from, organizationId, supabaseAdmin, to }),
   ]);
   const visibleContracts = contracts.filter((contract) => contract.linkedSsoAppName);
-  const visibleRenewals = renewals.filter((renewal) => renewal.linkedSsoAppName);
   const visibleGaps = { ...gaps, orphanContracts: [] };
   const reviewRows = gaps.possibleMatches;
   const pipelineReviewRows = [...reviewRows, ...gaps.usageReviewContracts];
   const pipelineItems = buildPipelineItems({
     contracts: visibleContracts,
-    renewals: visibleRenewals,
     reviewRows: pipelineReviewRows,
     today: todayIso,
   });
@@ -78,6 +71,8 @@ export default async function ContractsPage() {
 
       <ContractsPipeline renewals={pipelineItems} />
 
+      <MatchedContractsTable contracts={visibleContracts} />
+
       <section className="grid gap-6 xl:grid-cols-2">
         <GapTable
           empty="No SSO apps missing contracts right now."
@@ -109,17 +104,15 @@ type PipelineItem = ContractRow & {
 
 function buildPipelineItems({
   contracts,
-  renewals,
   reviewRows,
   today,
 }: {
   contracts: ContractRow[];
-  renewals: RenewalRow[];
   reviewRows: ContractGapRow[];
   today: string;
 }): PipelineItem[] {
   const itemByContractId = new Map<string, PipelineItem>(
-    renewals.map((renewal) => [renewal.contractId, renewal]),
+    contracts.map((contract) => [contract.contractId, contract]),
   );
   const contractById = new Map(
     contracts.map((contract) => [contract.contractId, contract]),
@@ -144,6 +137,66 @@ function buildPipelineItems({
   }
 
   return Array.from(itemByContractId.values());
+}
+
+function MatchedContractsTable({ contracts }: { contracts: ContractRow[] }) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm">
+      <div className="border-b border-zinc-200 px-5 py-4">
+        <h2 className="text-lg font-semibold text-zinc-950">Matched contracts</h2>
+        <p className="mt-1 text-sm text-zinc-500">
+          Pennylane contracts linked to Google-visible applications.
+        </p>
+      </div>
+      <div className="divide-y divide-zinc-100">
+        {contracts.length > 0 ? (
+          contracts.map((contract) => (
+            <Link
+              className="grid gap-3 px-5 py-4 text-sm transition hover:bg-zinc-50 md:grid-cols-[minmax(0,1.5fr)_repeat(5,minmax(0,1fr))] md:items-center"
+              href={`/app/contracts/${contract.contractId}`}
+              key={contract.contractId}
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <GapLogo logoUrl={contract.logoUrl} name={contract.vendorName} />
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-zinc-950">
+                    {contract.vendorName}
+                  </p>
+                  <p className="truncate text-xs text-zinc-500">
+                    {contract.linkedSsoAppName}
+                  </p>
+                </div>
+              </div>
+              <TableMetric label="Next" value={formatNullableDate(contract.nextRenewalDate)} />
+              <TableMetric label="Frequency" value={formatEnum(contract.billingFrequency)} />
+              <TableMetric
+                label="Amount"
+                value={formatMoney(
+                  contract.recurringAmountCents ?? contract.lastInvoiceAmountCents,
+                  contract.currency,
+                )}
+              />
+              <TableMetric label="Status" value={formatEnum(contract.status)} />
+              <TableMetric label="Confidence" value={formatEnum(contract.confidence)} />
+            </Link>
+          ))
+        ) : (
+          <EmptyState value="No Pennylane contracts are currently matched to Google-visible apps." />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function TableMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] font-medium uppercase text-zinc-400 md:hidden">
+        {label}
+      </p>
+      <p className="truncate text-zinc-700">{value}</p>
+    </div>
+  );
 }
 
 function buildPipelineReviewDateLabel(value: string | null): string {
