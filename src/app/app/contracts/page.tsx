@@ -69,9 +69,9 @@ export default async function ContractsPage() {
         />
       </section>
 
-      <ContractsPipeline renewals={pipelineItems} />
-
       <MatchedContractsTable contracts={visibleContracts} />
+
+      <ContractsPipeline renewals={pipelineItems} />
 
       <section className="grid gap-6 xl:grid-cols-2">
         <GapTable
