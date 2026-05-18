@@ -24,9 +24,9 @@ import {
   shouldAttemptAiContractExtraction,
   type AiContractExtractionMetadata,
 } from "@/lib/contracts/aiExtraction";
-import { normalizeContractVendorName } from "@/lib/contracts/normalization";
 import { rebuildContractAppLinks } from "@/lib/contracts/matching";
 import { applyContractLifecycleStatus } from "@/lib/contracts/lifecycle";
+import { resolveIdentitySupplierDomain } from "@/lib/integrations/google/matching";
 import { decryptSecret } from "@/lib/security/encryption";
 import {
   getPennylaneApiTimeoutMs,
@@ -40,6 +40,11 @@ import {
   extractPdfTextWithPdfJs,
   isPdfTextExtractionUnavailableError,
 } from "@/lib/integrations/pennylane/pdfText";
+import {
+  inferSupplierNameFromFilename,
+  inferSupplierNameFromSsoHints,
+  type SsoSupplierHint,
+} from "@/lib/integrations/pennylane/supplierNameInference";
 import { recoverStalePennylaneSyncRuns } from "@/lib/integrations/pennylane/syncRunRecovery";
 import type { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -48,11 +53,6 @@ type SupabaseAdminClient = ReturnType<typeof createSupabaseAdminClient>;
 type PennylaneIntegrationRow = {
   encrypted_access_token: string | null;
   id: string;
-};
-
-type SsoSupplierHint = {
-  supplierDomain: string | null;
-  supplierName: string;
 };
 
 type PennylaneInvoiceDbRow = {
@@ -356,19 +356,6 @@ export async function runPennylaneSync({
   }
 }
 
-const GENERIC_SSO_CANDIDATES = new Set([
-  "app",
-  "calendar",
-  "chrome",
-  "cloud",
-  "console",
-  "ios",
-  "mail",
-  "macos",
-  "manager",
-  "test",
-]);
-
 export function normalizeSupplierInvoices({
   invoiceRows,
   ssoSupplierHints,
@@ -397,9 +384,7 @@ export function normalizeSupplierInvoices({
       });
 
       if (!normalized) {
-        warnings.push(
-          `Skipped Pennylane invoice ${extractString(invoice, ["id"]) ?? index}: missing supplier name.`,
-        );
+        warnings.push(buildSkippedInvoiceWarning({ index, invoice, ssoSupplierHints }));
       }
 
       return normalized ? [normalized] : [];
@@ -453,9 +438,9 @@ export function normalizeSupplierInvoice({
   });
   const filenameSupplierName = inferSupplierNameFromFilename(invoice);
   const supplierName =
-    explicitSupplierName ?? inferredSsoSupplierName ?? filenameSupplierName;
+    inferredSsoSupplierName ?? explicitSupplierName ?? filenameSupplierName;
 
-  if (!supplierName) {
+  if (!supplierName || (ssoSupplierHints.length > 0 && !inferredSsoSupplierName)) {
     return null;
   }
 
@@ -508,6 +493,24 @@ export function normalizeSupplierInvoice({
     synced_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
+}
+
+function buildSkippedInvoiceWarning({
+  index,
+  invoice,
+  ssoSupplierHints,
+}: {
+  index: number;
+  invoice: PennylaneSupplierInvoiceApiRow;
+  ssoSupplierHints?: SsoSupplierHint[];
+}): string {
+  const invoiceId = extractString(invoice, ["id"]) ?? index;
+  const reason =
+    ssoSupplierHints && ssoSupplierHints.length > 0
+      ? "no SSO-visible supplier signal after PDF enrichment"
+      : "missing supplier name";
+
+  return `Skipped Pennylane invoice ${invoiceId}: ${reason}.`;
 }
 
 async function enrichInvoicesWithDetails({
@@ -1162,6 +1165,7 @@ async function loadSsoSupplierHints({
 
   return ((data ?? []) as unknown as Array<{
     supplier_identity_matches?: Array<{ identity_mode: string | null }>;
+    source: string | null;
     supplier_domain: string | null;
     supplier_name: string;
   }>)
@@ -1171,7 +1175,11 @@ async function loadSsoSupplierHints({
       ),
     )
     .map((supplier) => ({
-      supplierDomain: supplier.supplier_domain,
+      supplierDomain: resolveIdentitySupplierDomain({
+        source: supplier.source,
+        supplierDomain: supplier.supplier_domain,
+        supplierName: supplier.supplier_name,
+      }),
       supplierName: supplier.supplier_name,
     }));
 }
@@ -1194,132 +1202,12 @@ async function deletePennylaneSaasSuppliers({
   }
 }
 
-function inferSupplierNameFromSsoHints({
-  invoice,
-  ssoSupplierHints,
-}: {
-  invoice: PennylaneSupplierInvoiceApiRow;
-  ssoSupplierHints: SsoSupplierHint[];
-}): string | null {
-  const invoiceText = normalizeContractVendorName(collectInvoiceText(invoice));
-  const sortedHints = [...ssoSupplierHints].sort(
-    (left, right) => right.supplierName.length - left.supplierName.length,
-  );
-
-  for (const hint of sortedHints) {
-    const candidates = getSsoHintCandidates(hint);
-
-    if (candidates.some((candidate) => matchesNormalizedText(invoiceText, candidate))) {
-      return inferCanonicalSupplierName(hint, invoiceText);
-    }
-  }
-
-  return null;
-}
-
-function inferSupplierNameFromFilename(
-  invoice: PennylaneSupplierInvoiceApiRow,
-): string | null {
-  const filename = extractString(invoice, ["filename"]);
-
-  if (!filename) {
-    return null;
-  }
-
-  const withoutExtension = filename.replace(/\.[a-z0-9]+$/i, "");
-  const invoicePrefix = withoutExtension.match(/^(.+?)[_\-\s]+invoice\b/i);
-
-  if (!invoicePrefix) {
-    return null;
-  }
-
-  return invoicePrefix[1].replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function getSsoHintCandidates(hint: SsoSupplierHint): string[] {
-  const normalizedName = normalizeContractVendorName(hint.supplierName);
-  const domainStem = normalizeContractVendorName(
-    hint.supplierDomain?.split(".")[0] ?? "",
-  );
-  const firstNameToken = normalizedName.split(" ")[0] ?? "";
-
-  return Array.from(
-    new Set(
-      [normalizedName, domainStem, firstNameToken]
-        .filter((candidate) => candidate.length >= 3)
-        .filter((candidate) => !GENERIC_SSO_CANDIDATES.has(candidate)),
-    ),
-  );
-}
-
 function isPdfToTextUnavailableError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
 
   return error.message.includes("ENOENT") && error.message.includes("pdftotext");
-}
-
-function matchesNormalizedText(text: string, candidate: string): boolean {
-  return (
-    text === candidate ||
-    text.startsWith(`${candidate} `) ||
-    text.endsWith(` ${candidate}`) ||
-    text.includes(` ${candidate} `)
-  );
-}
-
-function inferCanonicalSupplierName(
-  hint: SsoSupplierHint,
-  invoiceText: string,
-): string {
-  const domainStem = normalizeContractVendorName(
-    hint.supplierDomain?.split(".")[0] ?? "",
-  );
-
-  if (domainStem && matchesNormalizedText(invoiceText, domainStem)) {
-    return toTitleCase(domainStem);
-  }
-
-  const firstNameToken = normalizeContractVendorName(hint.supplierName).split(" ")[0];
-
-  return firstNameToken && matchesNormalizedText(invoiceText, firstNameToken)
-    ? toTitleCase(firstNameToken)
-    : hint.supplierName;
-}
-
-function collectInvoiceText(value: unknown, depth = 0): string {
-  if (depth > 5 || value === null || value === undefined) {
-    return "";
-  }
-
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => collectInvoiceText(item, depth + 1)).join(" ");
-  }
-
-  if (typeof value === "object") {
-    return Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => key !== AI_CONTRACT_EXTRACTION_RAW_JSON_KEY)
-      .map(([, child]) => collectInvoiceText(child, depth + 1))
-      .join(" ");
-  }
-
-  return "";
-}
-
-function toTitleCase(value: string): string {
-  return value
-    .split(" ")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 async function ensureNoRunningPennylaneSync({

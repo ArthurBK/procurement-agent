@@ -226,6 +226,50 @@ test("keeps deterministic period over conflicting AI extraction metadata", () =>
   assert.equal((conflicts as Array<unknown>).length > 0, true);
 });
 
+test("groups invoices by AI extracted vendor and product when Pennylane supplier is generic", () => {
+  const contracts = inferContractsFromPennylaneInvoices([
+    invoice({
+      amountCents: 8400,
+      externalId: "aircall-1",
+      invoiceDate: "2026-05-01",
+      rawJson: {
+        [AI_CONTRACT_EXTRACTION_RAW_JSON_KEY]: aiExtractionFields({
+          canonicalVendorName: "Aircall",
+          productName: "Aircall Essentials",
+          vendorName: "Aircall SAS",
+        }),
+      },
+      supplierName: "SWIFTGUM",
+    }),
+    invoice({
+      amountCents: 4990,
+      externalId: "notion-calendar-1",
+      invoiceDate: "2026-05-09",
+      rawJson: {
+        [AI_CONTRACT_EXTRACTION_RAW_JSON_KEY]: aiExtractionFields({
+          canonicalVendorName: "Notion",
+          productName: "Notion Calendar",
+          vendorName: "Notion Labs, Inc.",
+        }),
+      },
+      supplierName: "SWIFTGUM",
+    }),
+  ]);
+
+  assert.equal(contracts.length, 2);
+  assert.deepEqual(
+    contracts.map((contract) => contract.productName).sort(),
+    ["Aircall Essentials", "Notion Calendar"],
+  );
+  assert.deepEqual(
+    contracts.map((contract) => contract.sourceExternalId).sort(),
+    [
+      "pennylane:aircall:aircall essentials:EUR:monthly",
+      "pennylane:notion:notion calendar:EUR:monthly",
+    ],
+  );
+});
+
 test("infers monthly frequency from recurring invoice history", () => {
   assert.equal(
     inferFrequencyFromInvoiceHistory([
@@ -254,5 +298,40 @@ function invoice(
     supplierExternalId: "supplier-1",
     supplierName: "OpenAI LLC",
     ...overrides,
+  };
+}
+
+function aiExtractionFields(
+  fields: {
+    canonicalVendorName: string;
+    productName: string;
+    vendorName: string;
+  },
+): Record<string, unknown> {
+  return {
+    extracted_at: "2026-05-15T00:00:00.000Z",
+    extracted_fields: {
+      billingFrequency: "monthly",
+      canonicalVendorName: fields.canonicalVendorName,
+      confidence: "high",
+      confidenceReason: "The invoice states a monthly subscription.",
+      currency: "EUR",
+      currentPeriodEnd: "2026-06-01",
+      currentPeriodStart: "2026-05-01",
+      isProrata: false,
+      lastInvoiceAmountCents: 8400,
+      missingFields: [],
+      nextRenewalDate: "2026-06-01",
+      planName: null,
+      productName: fields.productName,
+      quantity: null,
+      recurringAmountCents: 8400,
+      seats: null,
+      vendorName: fields.vendorName,
+    },
+    model: "gpt-5-mini",
+    prompt_version: "2026-05-18.v2",
+    provider: "openai",
+    source_text_hash: "hash",
   };
 }

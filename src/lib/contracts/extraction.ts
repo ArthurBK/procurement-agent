@@ -70,13 +70,22 @@ export function inferContractsFromPennylaneInvoices(
   const groups = new Map<string, PennylaneInvoiceForContractExtraction[]>();
 
   for (const invoice of invoices) {
-    const vendorKey = normalizeContractVendorName(invoice.supplierName);
+    const vendorKey = normalizeContractVendorName(
+      getInvoiceGroupingVendorName(invoice),
+    );
 
     if (!vendorKey) {
       continue;
     }
 
-    const groupKey = [vendorKey, invoice.currency.toUpperCase()].join("|");
+    const productKey =
+      normalizeContractVendorName(getInvoiceGroupingProductName(invoice)) ||
+      "default";
+    const groupKey = [
+      vendorKey,
+      productKey,
+      invoice.currency.toUpperCase(),
+    ].join("|");
     groups.set(groupKey, [...(groups.get(groupKey) ?? []), invoice]);
   }
 
@@ -171,12 +180,14 @@ export function inferContractForInvoiceGroup(
   });
   const vendorName = selectVendorName({ aiFields, latestInvoice });
   const normalizedSelectedVendorName = normalizeContractVendorName(vendorName);
-  const sourceExternalId = [
-    "pennylane",
-    normalizedSelectedVendorName,
-    latestInvoice.currency.toUpperCase(),
+  const productName =
+    extractProductName(latestInvoice) ?? aiFields?.productName ?? null;
+  const sourceExternalId = buildContractSourceExternalId({
     billingFrequency,
-  ].join(":");
+    currency: latestInvoice.currency,
+    normalizedVendorName: normalizedSelectedVendorName || normalizedVendorName,
+    productName,
+  });
 
   return [
     {
@@ -220,7 +231,7 @@ export function inferContractForInvoiceGroup(
       nextRenewalDate,
       normalizedVendorName: normalizedSelectedVendorName || normalizedVendorName,
       planName: extractPlanName(latestInvoice) ?? aiFields?.planName ?? null,
-      productName: extractProductName(latestInvoice) ?? aiFields?.productName ?? null,
+      productName,
       quantity: extractQuantity(latestInvoice) ?? aiFields?.quantity ?? null,
       recurringAmountCents,
       seats: extractSeats(latestInvoice) ?? aiFields?.seats ?? null,
@@ -689,6 +700,49 @@ function selectVendorName({
     aiFields?.vendorName?.trim() ||
     latestInvoice.supplierName
   );
+}
+
+function getInvoiceGroupingVendorName(
+  invoice: PennylaneInvoiceForContractExtraction,
+): string {
+  const aiFields = getAiContractExtractionMetadata(invoice.rawJson)?.extracted_fields;
+
+  return (
+    aiFields?.canonicalVendorName?.trim() ||
+    aiFields?.vendorName?.trim() ||
+    invoice.supplierName
+  );
+}
+
+function getInvoiceGroupingProductName(
+  invoice: PennylaneInvoiceForContractExtraction,
+): string | null {
+  const aiFields = getAiContractExtractionMetadata(invoice.rawJson)?.extracted_fields;
+
+  return aiFields?.productName?.trim() || extractProductName(invoice);
+}
+
+function buildContractSourceExternalId({
+  billingFrequency,
+  currency,
+  normalizedVendorName,
+  productName,
+}: {
+  billingFrequency: BillingFrequency;
+  currency: string;
+  normalizedVendorName: string;
+  productName: string | null;
+}): string {
+  const normalizedProductName = normalizeContractVendorName(productName);
+  const parts = [
+    "pennylane",
+    normalizedVendorName,
+    ...(normalizedProductName ? [normalizedProductName] : []),
+    currency.toUpperCase(),
+    billingFrequency,
+  ];
+
+  return parts.join(":");
 }
 
 function selectAiRecurringAmount({
