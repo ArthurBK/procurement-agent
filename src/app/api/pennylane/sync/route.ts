@@ -1,0 +1,30 @@
+import { authContextErrorToResponse } from "@/lib/auth/workspace-core";
+import { getIntegrationRequestContext } from "@/lib/integrations/context";
+import { runPennylaneSync } from "@/lib/integrations/pennylane/sync";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+
+export const runtime = "nodejs";
+
+export async function POST() {
+  try {
+    const result = await runPennylaneSync({
+      context: await getIntegrationRequestContext(),
+      supabaseAdmin: createSupabaseAdminClient(),
+    });
+    const status = result.status === "failed" ? 500 : 200;
+
+    return Response.json(result, { status });
+  } catch (error) {
+    const authResponse = authContextErrorToResponse(error);
+
+    if (authResponse) {
+      return authResponse;
+    }
+
+    const message =
+      error instanceof Error ? error.message : "Unable to sync Pennylane.";
+    const status = message.includes("already running") ? 409 : 500;
+
+    return Response.json({ errors: [message] }, { status });
+  }
+}
