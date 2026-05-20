@@ -24,7 +24,9 @@ type OrganizationRow = {
 };
 
 type OrganizationMemberRow = {
+  email: string;
   role: MemberRole;
+  user_id: string;
 };
 
 export async function getAuthenticatedWorkspaceContext(): Promise<WorkspaceContext> {
@@ -205,7 +207,7 @@ async function ensureOrganizationMembership({
   const { data: existingMember, error: existingMemberError } =
     await supabaseAdmin
       .from("organization_members")
-      .select("role")
+      .select("email, role, user_id")
       .eq("organization_id", organizationId)
       .eq("user_id", userId)
       .maybeSingle();
@@ -218,6 +220,22 @@ async function ensureOrganizationMembership({
 
   if (existingMember) {
     return (existingMember as OrganizationMemberRow).role;
+  }
+
+  const existingMemberByEmail = await loadOrganizationMembershipByEmail({
+    email,
+    organizationId,
+    supabaseAdmin,
+  });
+
+  if (existingMemberByEmail) {
+    return attachMembershipToCurrentUser({
+      email,
+      member: existingMemberByEmail,
+      organizationId,
+      supabaseAdmin,
+      userId,
+    });
   }
 
   const memberCount = await countOrganizationMembers({
@@ -238,25 +256,117 @@ async function ensureOrganizationMembership({
     return role;
   }
 
-  const { data: memberAfterRace, error: memberAfterRaceError } =
-    await supabaseAdmin
-      .from("organization_members")
-      .select("role")
-      .eq("organization_id", organizationId)
-      .eq("user_id", userId)
-      .maybeSingle();
+  const memberAfterRace =
+    (await loadOrganizationMembershipByUserId({
+      organizationId,
+      supabaseAdmin,
+      userId,
+    })) ??
+    (await loadOrganizationMembershipByEmail({
+      email,
+      organizationId,
+      supabaseAdmin,
+    }));
 
-  if (memberAfterRaceError || !memberAfterRace) {
+  if (!memberAfterRace) {
     throw new WorkspaceAuthError(
       "workspace_membership_required",
-      `Unable to create workspace membership: ${
-        insertError.message ?? memberAfterRaceError?.message
-      }`,
+      `Unable to create workspace membership: ${insertError.message}`,
       403,
     );
   }
 
-  return (memberAfterRace as OrganizationMemberRow).role;
+  return attachMembershipToCurrentUser({
+    email,
+    member: memberAfterRace,
+    organizationId,
+    supabaseAdmin,
+    userId,
+  });
+}
+
+async function loadOrganizationMembershipByUserId({
+  organizationId,
+  supabaseAdmin,
+  userId,
+}: {
+  organizationId: string;
+  supabaseAdmin: SupabaseAdminClient;
+  userId: string;
+}): Promise<OrganizationMemberRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from("organization_members")
+    .select("email, role, user_id")
+    .eq("organization_id", organizationId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Unable to load workspace membership: ${error.message}`);
+  }
+
+  return data ? (data as OrganizationMemberRow) : null;
+}
+
+async function loadOrganizationMembershipByEmail({
+  email,
+  organizationId,
+  supabaseAdmin,
+}: {
+  email: string;
+  organizationId: string;
+  supabaseAdmin: SupabaseAdminClient;
+}): Promise<OrganizationMemberRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from("organization_members")
+    .select("email, role, user_id")
+    .eq("organization_id", organizationId)
+    .eq("email", email)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Unable to load workspace membership: ${error.message}`);
+  }
+
+  return data ? (data as OrganizationMemberRow) : null;
+}
+
+async function attachMembershipToCurrentUser({
+  email,
+  member,
+  organizationId,
+  supabaseAdmin,
+  userId,
+}: {
+  email: string;
+  member: OrganizationMemberRow;
+  organizationId: string;
+  supabaseAdmin: SupabaseAdminClient;
+  userId: string;
+}): Promise<MemberRole> {
+  if (member.user_id === userId && member.email === email) {
+    return member.role;
+  }
+
+  const { error } = await supabaseAdmin
+    .from("organization_members")
+    .update({
+      email,
+      updated_at: new Date().toISOString(),
+      user_id: userId,
+    })
+    .eq("organization_id", organizationId)
+    .eq("email", member.email);
+
+  if (error) {
+    throw new WorkspaceAuthError(
+      "workspace_membership_required",
+      `Unable to attach workspace membership: ${error.message}`,
+      403,
+    );
+  }
+
+  return member.role;
 }
 
 async function countOrganizationMembers({

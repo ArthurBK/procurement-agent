@@ -2,14 +2,24 @@ import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { LoginForm } from "@/app/login/login-form";
 import { getAuthenticatedWorkspaceContext } from "@/lib/auth/workspace";
-import { WorkspaceAuthError } from "@/lib/auth/workspace-core";
+import {
+  WorkspaceAuthError,
+  getSafeAuthRedirectPath,
+} from "@/lib/auth/workspace-core";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string | string[] }>;
+}) {
   await connection();
+
+  const resolvedSearchParams = await searchParams;
+  const next = getSafeAuthRedirectPath(resolvedSearchParams.next);
 
   try {
     await getAuthenticatedWorkspaceContext();
-    redirect("/app/suppliers");
+    redirect(next);
   } catch (error) {
     if (!(error instanceof WorkspaceAuthError)) {
       throw error;

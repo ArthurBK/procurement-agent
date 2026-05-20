@@ -6,6 +6,8 @@ export type WorkspaceAuthErrorCode =
   | "public_email_domain"
   | "workspace_membership_required";
 
+export const DEFAULT_AUTH_REDIRECT_PATH = "/app/usage/identity";
+
 export class WorkspaceAuthError extends Error {
   code: WorkspaceAuthErrorCode;
   status: 401 | 403;
@@ -104,6 +106,24 @@ export function createWorkspaceSlugFromDomain(domain: string): string {
 
 export function chooseRoleForNewMember(memberCount: number): MemberRole {
   return memberCount === 0 ? "owner" : "member";
+}
+
+export function getSafeAuthRedirectPath(value: unknown): string {
+  const candidate = Array.isArray(value) ? value[0] : value;
+
+  if (
+    typeof candidate !== "string" ||
+    !candidate.startsWith("/") ||
+    candidate.startsWith("//")
+  ) {
+    return DEFAULT_AUTH_REDIRECT_PATH;
+  }
+
+  if (candidate.startsWith("/login") || candidate.startsWith("/auth/")) {
+    return DEFAULT_AUTH_REDIRECT_PATH;
+  }
+
+  return candidate;
 }
 
 export function authContextErrorToResponse(error: unknown): Response | null {

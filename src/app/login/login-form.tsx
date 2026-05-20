@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { getSafeAuthRedirectPath } from "@/lib/auth/workspace-core";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 const ERROR_COPY: Record<string, string> = {
@@ -26,7 +27,7 @@ export function LoginForm() {
     setIsLoading(true);
 
     const supabase = createSupabaseBrowserClient();
-    const next = searchParams.get("next") ?? "/app/suppliers";
+    const next = getSafeAuthRedirectPath(searchParams.get("next"));
     const redirectTo = new URL("/auth/callback", window.location.origin);
     redirectTo.searchParams.set("next", next);
     const { error: signInError } = await supabase.auth.signInWithOAuth({

@@ -6,6 +6,7 @@ import {
   createWorkspaceNameFromDomain,
   createWorkspaceSlugFromDomain,
   getEnterpriseEmailDomain,
+  getSafeAuthRedirectPath,
   isPublicEmailDomain,
   normalizeUserEmail,
 } from "./workspace-core.ts";
@@ -34,4 +35,13 @@ test("derives deterministic workspace display values from domain", () => {
 test("assigns owner to first workspace member and member afterwards", () => {
   assert.equal(chooseRoleForNewMember(0), "owner");
   assert.equal(chooseRoleForNewMember(1), "member");
+});
+
+test("keeps auth redirect paths inside the app", () => {
+  assert.equal(getSafeAuthRedirectPath("/app/contracts"), "/app/contracts");
+  assert.equal(getSafeAuthRedirectPath(["/app/usage/identity"]), "/app/usage/identity");
+  assert.equal(getSafeAuthRedirectPath("https://example.com"), "/app/usage/identity");
+  assert.equal(getSafeAuthRedirectPath("//example.com"), "/app/usage/identity");
+  assert.equal(getSafeAuthRedirectPath("/login"), "/app/usage/identity");
+  assert.equal(getSafeAuthRedirectPath("/auth/callback"), "/app/usage/identity");
 });

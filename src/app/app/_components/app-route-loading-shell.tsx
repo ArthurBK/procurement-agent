@@ -48,8 +48,8 @@ export function AppRouteLoadingShell({
           </div>
         </aside>
 
-        <div className="flex-1 px-4 py-8 sm:px-6 lg:ml-64 lg:px-8">
-          <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+        <div className="min-w-0 flex-1 px-4 py-8 sm:px-6 lg:ml-64 lg:px-8">
+          <div className="mx-auto flex min-w-0 w-full max-w-7xl flex-col gap-6">
             <header className="flex flex-col gap-2">
               <p className="text-sm font-medium text-zinc-500">{eyebrow}</p>
               <h1 className="text-3xl font-semibold tracking-normal">

@@ -4,6 +4,31 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
+  ArrowUpDown,
+  BadgeCheck,
+  BadgeEuro,
+  CalendarDays,
+  Check,
+  ChevronDown,
+  CircleGauge,
+  Eye,
+  EyeOff,
+  GripVertical,
+  Hash,
+  ListFilter,
+  Percent,
+  Plus,
+  Search,
+  Sigma,
+  SlidersHorizontal,
+  Table2,
+  Type,
+  Users,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import {
   computeUtilization,
   formatRelativeLastUsed,
   getLoginFrequency,
@@ -25,6 +50,7 @@ import {
   type IdentityFilterOperator,
   type IdentityFilterProperty,
   type IdentityFilterRule,
+  type IdentitySortDirection,
   type IdentitySortField,
   type IdentitySortRule,
 } from "@/lib/google-workspace/identityTableControls";
@@ -91,11 +117,11 @@ const EMPTY_STATUS: GoogleStatusResponse = {
 };
 
 const FILTER_PROPERTY_OPTIONS = [
-  { icon: "Aa", label: "Name", value: "application" },
-  { icon: "↗", label: "Identity mode", value: "identityMode" },
-  { icon: "◇", label: "Confidence", value: "confidence" },
-  { icon: "#", label: "Pricing", value: "pricing" },
-  { icon: "%", label: "Utilization", value: "utilization" },
+  { Icon: Type, label: "Name", value: "application" },
+  { Icon: CircleGauge, label: "Identity mode", value: "identityMode" },
+  { Icon: BadgeCheck, label: "Confidence", value: "confidence" },
+  { Icon: Hash, label: "Pricing", value: "pricing" },
+  { Icon: Percent, label: "Utilization", value: "utilization" },
 ];
 
 const IDENTITY_MODE_FILTER_OPTIONS = [
@@ -148,13 +174,125 @@ const FILTER_OPERATOR_OPTIONS = {
 
 const SORT_FIELD_OPTIONS = [
   { label: "Name", value: "application" },
-  { label: "Pricing", value: "monthlySpend" },
+  { label: "Total pricing", value: "monthlySpend" },
   { label: "Last SAML Login", value: "lastSignalAt" },
   { label: "Login Users", value: "loginUsers" },
   { label: "Utilization", value: "utilization" },
   { label: "Login Frequency", value: "loginFrequency" },
   { label: "Confidence", value: "confidence" },
 ];
+
+type IdentityColumnId =
+  | "application"
+  | "pricingType"
+  | "unitPrice"
+  | "totalPricing"
+  | "lastSignalAt"
+  | "loginUsers"
+  | "utilization"
+  | "loginFrequency"
+  | "confidence";
+
+type IdentityColumnConfig = {
+  defaultLabel: string;
+  filterProperty?: IdentityFilterProperty;
+  Icon: LucideIcon;
+  id: IdentityColumnId;
+  sortField?: IdentitySortField;
+  widthClassName: string;
+};
+
+type IdentityColumnSettings = Record<
+  IdentityColumnId,
+  {
+    label: string;
+    visible: boolean;
+  }
+>;
+
+const COLUMN_MENU_WIDTH = 318;
+const TOOLBAR_MENU_WIDTH = 352;
+
+const IDENTITY_TABLE_COLUMNS: IdentityColumnConfig[] = [
+  {
+    defaultLabel: "Application",
+    filterProperty: "application",
+    Icon: Type,
+    id: "application",
+    sortField: "application",
+    widthClassName: "w-[260px]",
+  },
+  {
+    defaultLabel: "Pricing type",
+    filterProperty: "pricing",
+    Icon: Hash,
+    id: "pricingType",
+    sortField: "monthlySpend",
+    widthClassName: "w-[135px]",
+  },
+  {
+    defaultLabel: "Unit price",
+    filterProperty: "pricing",
+    Icon: BadgeEuro,
+    id: "unitPrice",
+    sortField: "monthlySpend",
+    widthClassName: "w-[140px]",
+  },
+  {
+    defaultLabel: "Total pricing",
+    filterProperty: "pricing",
+    Icon: Sigma,
+    id: "totalPricing",
+    sortField: "monthlySpend",
+    widthClassName: "w-[150px]",
+  },
+  {
+    defaultLabel: "Last SAML Login",
+    Icon: CalendarDays,
+    id: "lastSignalAt",
+    sortField: "lastSignalAt",
+    widthClassName: "w-[145px]",
+  },
+  {
+    defaultLabel: "Login Users",
+    Icon: Users,
+    id: "loginUsers",
+    sortField: "loginUsers",
+    widthClassName: "w-[120px]",
+  },
+  {
+    defaultLabel: "Utilization",
+    filterProperty: "utilization",
+    Icon: Percent,
+    id: "utilization",
+    sortField: "utilization",
+    widthClassName: "w-[170px]",
+  },
+  {
+    defaultLabel: "Login Frequency",
+    Icon: Activity,
+    id: "loginFrequency",
+    sortField: "loginFrequency",
+    widthClassName: "w-[135px]",
+  },
+  {
+    defaultLabel: "Confidence",
+    filterProperty: "confidence",
+    Icon: BadgeCheck,
+    id: "confidence",
+    sortField: "confidence",
+    widthClassName: "w-[110px]",
+  },
+];
+
+function createDefaultColumnSettings(): IdentityColumnSettings {
+  return Object.fromEntries(
+    IDENTITY_TABLE_COLUMNS.map((column) => [
+      column.id,
+      { label: column.defaultLabel, visible: true },
+    ]),
+  ) as IdentityColumnSettings;
+}
 
 export function ConnectGoogleWorkspaceButton({
   children = "Connect Google Workspace",
@@ -616,7 +754,7 @@ export function IdentitySignalsDashboard({
   const dashboardMetrics = getDashboardMetrics(data);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex min-w-0 flex-col gap-6">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <SummaryCard
           label="Google Users Synced"
@@ -674,17 +812,52 @@ export function SupplierIdentitySignalsTable({
   const [sorts, setSorts] = useState<IdentitySortRule[]>(
     initialTableState.sorts,
   );
-  const [openMenu, setOpenMenu] = useState<"filter" | "sort" | null>(null);
+  const [columnSettings, setColumnSettings] = useState<IdentityColumnSettings>(
+    createDefaultColumnSettings,
+  );
+  const [openMenu, setOpenMenu] = useState<
+    "filter" | "properties" | "sort" | null
+  >(null);
+  const [openColumnMenu, setOpenColumnMenu] =
+    useState<IdentityColumnId | null>(null);
+  const [columnMenuPosition, setColumnMenuPosition] = useState({
+    left: 0,
+    top: 0,
+  });
+  const [toolbarMenuPosition, setToolbarMenuPosition] = useState({
+    left: 0,
+    top: 0,
+  });
   const filterMenuRef = useRef<HTMLDivElement | null>(null);
+  const propertiesMenuRef = useRef<HTMLDivElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
+  const columnMenuRef = useRef<HTMLDivElement | null>(null);
   const lastWrittenSearchString = useRef<string | null>(null);
   const visibleSuppliers = useMemo(
     () => applyIdentityTableControls({ filters, sorts, suppliers }),
     [filters, sorts, suppliers],
   );
+  const visibleColumns = useMemo(
+    () =>
+      IDENTITY_TABLE_COLUMNS.filter(
+        (column) => columnSettings[column.id]?.visible ?? true,
+      ),
+    [columnSettings],
+  );
   const activeFilterCount = getActiveIdentityFilterCount(filters);
   const hasCustomSort = sorts.length > 0;
-  const hasCustomView = activeFilterCount > 0 || hasCustomSort;
+  const hasCustomColumns = IDENTITY_TABLE_COLUMNS.some((column) => {
+    const setting = columnSettings[column.id];
+
+    return (
+      !setting?.visible ||
+      (setting.label.trim() && setting.label.trim() !== column.defaultLabel)
+    );
+  });
+  const hasCustomView = activeFilterCount > 0 || hasCustomSort || hasCustomColumns;
+  const activeColumn = openColumnMenu
+    ? IDENTITY_TABLE_COLUMNS.find((column) => column.id === openColumnMenu) ?? null
+    : null;
 
   useEffect(() => {
     if (lastWrittenSearchString.current === currentSearchString) {
@@ -716,7 +889,7 @@ export function SupplierIdentitySignalsTable({
   }, [currentSearchString, filters, pathname, router, sorts]);
 
   useEffect(() => {
-    if (!openMenu) {
+    if (!openMenu && !openColumnMenu) {
       return;
     }
 
@@ -729,17 +902,21 @@ export function SupplierIdentitySignalsTable({
 
       if (
         filterMenuRef.current?.contains(target) ||
+        propertiesMenuRef.current?.contains(target) ||
+        columnMenuRef.current?.contains(target) ||
         sortMenuRef.current?.contains(target)
       ) {
         return;
       }
 
       setOpenMenu(null);
+      setOpenColumnMenu(null);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setOpenMenu(null);
+        setOpenColumnMenu(null);
       }
     }
 
@@ -750,7 +927,7 @@ export function SupplierIdentitySignalsTable({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [openMenu]);
+  }, [openColumnMenu, openMenu]);
 
   function addFilterRule(property: IdentityFilterProperty = "application") {
     setFilters((current) => [...current, createIdentityFilterRule(property)]);
@@ -789,23 +966,132 @@ export function SupplierIdentitySignalsTable({
     setSorts((current) => current.filter((sort) => sort.id !== id));
   }
 
+  function openColumnHeaderMenu(
+    columnId: IdentityColumnId,
+    element: HTMLButtonElement,
+  ) {
+    const bounds = element.getBoundingClientRect();
+
+    setColumnMenuPosition({
+      left: Math.max(
+        8,
+        Math.min(bounds.left, window.innerWidth - COLUMN_MENU_WIDTH - 8),
+      ),
+      top: bounds.bottom + 6,
+    });
+    setOpenMenu(null);
+    setOpenColumnMenu((current) => (current === columnId ? null : columnId));
+  }
+
+  function openToolbarMenu(
+    menu: "filter" | "properties" | "sort",
+    element: HTMLButtonElement,
+    width = TOOLBAR_MENU_WIDTH,
+  ) {
+    const bounds = element.getBoundingClientRect();
+
+    setToolbarMenuPosition({
+      left: Math.max(8, Math.min(bounds.left, window.innerWidth - width - 8)),
+      top: bounds.bottom + 6,
+    });
+    setOpenColumnMenu(null);
+    setOpenMenu((current) => (current === menu ? null : menu));
+  }
+
+  function updateColumnLabel(columnId: IdentityColumnId, label: string) {
+    setColumnSettings((current) => ({
+      ...current,
+      [columnId]: {
+        ...current[columnId],
+        label,
+      },
+    }));
+  }
+
+  function setColumnVisibility(columnId: IdentityColumnId, visible: boolean) {
+    if (!visible && visibleColumns.length <= 1) {
+      return;
+    }
+
+    setColumnSettings((current) => ({
+      ...current,
+      [columnId]: {
+        ...current[columnId],
+        visible,
+      },
+    }));
+  }
+
+  function showAllColumns() {
+    setColumnSettings((current) => {
+      const next = { ...current };
+
+      for (const column of IDENTITY_TABLE_COLUMNS) {
+        next[column.id] = { ...next[column.id], visible: true };
+      }
+
+      return next;
+    });
+  }
+
+  function addColumnFilter(column: IdentityColumnConfig) {
+    if (column.filterProperty) {
+      setFilters((current) => [
+        ...current,
+        createIdentityFilterRule(column.filterProperty),
+      ]);
+    }
+
+    setOpenColumnMenu(null);
+    setOpenMenu(null);
+  }
+
+  function setColumnSort(
+    column: IdentityColumnConfig,
+    direction: IdentitySortDirection,
+  ) {
+    if (!column.sortField) {
+      return;
+    }
+
+    const sortField = column.sortField;
+
+    setSorts((current) => [
+      {
+        ...createIdentitySortRule(sortField),
+        direction,
+        field: sortField,
+      },
+      ...current.filter((sort) => sort.field !== sortField),
+    ]);
+    setOpenColumnMenu(null);
+  }
+
+  function resetView() {
+    setFilters(DEFAULT_IDENTITY_TABLE_FILTERS);
+    setSorts(DEFAULT_IDENTITY_TABLE_SORTS);
+    setColumnSettings(createDefaultColumnSettings());
+  }
+
   return (
-    <section className="group/identity-table rounded-lg border border-zinc-200 bg-white shadow-sm">
-      <div className="relative z-20 border-b border-zinc-100">
-        <div className="flex min-h-11 flex-col gap-2 px-3 py-1.5 md:flex-row md:items-center md:justify-between">
-          <div className="flex min-w-0 flex-wrap items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/identity-table:opacity-100 group-focus-within/identity-table:opacity-100">
+    <section className="isolate min-w-0 max-w-full overflow-hidden rounded-[10px] border border-[#e6e4df] bg-white shadow-[0_1px_2px_rgba(15,15,15,0.04)]">
+      <div className="relative z-[200] bg-white">
+        <div className="flex flex-col gap-4 px-5 pb-3 pt-5 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0">
+            <h2 className="truncate text-[34px] font-semibold leading-tight tracking-normal text-[#37352f]">
+              Applications
+            </h2>
+          </div>
+          <div className="flex shrink-0 items-center gap-1 text-[#8b8781]">
             <div className="relative" ref={filterMenuRef}>
-              <ToolbarControlButton
+              <NotionToolbarIconButton
                 active={activeFilterCount > 0}
                 expanded={openMenu === "filter"}
-                icon={<PlusIcon />}
                 label="Filter"
-                onClick={() =>
-                  setOpenMenu((current) =>
-                    current === "filter" ? null : "filter",
-                  )
-                }
-              />
+                onClick={(event) => openToolbarMenu("filter", event.currentTarget)}
+              >
+                <ListFilter className="h-4 w-4" />
+              </NotionToolbarIconButton>
               {openMenu === "filter" ? (
                 <FilterBuilderPopover
                   filters={filters}
@@ -813,91 +1099,160 @@ export function SupplierIdentitySignalsTable({
                   onClear={() => setFilters(DEFAULT_IDENTITY_TABLE_FILTERS)}
                   onRemove={removeFilterRule}
                   onUpdate={updateFilterRule}
+                  position={toolbarMenuPosition}
                 />
               ) : null}
             </div>
             <div className="relative" ref={sortMenuRef}>
-              <ToolbarControlButton
+              <NotionToolbarIconButton
                 active={hasCustomSort}
-                compact
                 expanded={openMenu === "sort"}
-                icon={<SortIcon />}
                 label="Sort"
-                onClick={() =>
-                  setOpenMenu((current) => (current === "sort" ? null : "sort"))
-                }
-              />
+                onClick={(event) => openToolbarMenu("sort", event.currentTarget)}
+              >
+                <ArrowUpDown className="h-4 w-4" />
+              </NotionToolbarIconButton>
               {openMenu === "sort" ? (
                 <SortBuilderPopover
                   onAdd={addSortRule}
                   onClear={() => setSorts(DEFAULT_IDENTITY_TABLE_SORTS)}
                   onRemove={removeSortRule}
                   onUpdate={updateSortRule}
+                  position={toolbarMenuPosition}
                   sorts={sorts}
                 />
               ) : null}
             </div>
-            <span className="ml-1 text-[13px] text-[#a09d97]">
-              {visibleSuppliers.length}
-              {visibleSuppliers.length === suppliers.length
-                ? ""
-                : ` of ${suppliers.length}`}
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/identity-table:opacity-100 group-focus-within/identity-table:opacity-100">
-            {hasCustomView ? (
-              <button
-                className="h-7 rounded-[5px] px-2 text-[13px] font-medium text-[#78746e] transition-colors hover:bg-[#f1f1ef] hover:text-[#37352f]"
-                onClick={() => {
-                  setFilters(DEFAULT_IDENTITY_TABLE_FILTERS);
-                  setSorts(DEFAULT_IDENTITY_TABLE_SORTS);
-                }}
-                type="button"
+            <NotionToolbarIconButton
+              active={false}
+              expanded={false}
+              label="Search"
+              onClick={() => addFilterRule("application")}
+            >
+              <Search className="h-4 w-4" />
+            </NotionToolbarIconButton>
+            <div className="relative" ref={propertiesMenuRef}>
+              <NotionToolbarIconButton
+                active={hasCustomColumns}
+                expanded={openMenu === "properties"}
+                label="Properties"
+                onClick={(event) =>
+                  openToolbarMenu(
+                    "properties",
+                    event.currentTarget,
+                    336,
+                  )
+                }
               >
-                Reset
-              </button>
-            ) : null}
+                <SlidersHorizontal className="h-4 w-4" />
+              </NotionToolbarIconButton>
+              {openMenu === "properties" ? (
+                <ColumnVisibilityPopover
+                  columnSettings={columnSettings}
+                  columns={IDENTITY_TABLE_COLUMNS}
+                  onShowAll={showAllColumns}
+                  onVisibilityChange={setColumnVisibility}
+                  position={toolbarMenuPosition}
+                  visibleColumnsCount={visibleColumns.length}
+                />
+              ) : null}
+            </div>
           </div>
         </div>
-        {hasCustomView ? (
-          <ActiveViewChips
-            filters={filters}
-            onFiltersChange={setFilters}
-            onSortsChange={setSorts}
-            sorts={sorts}
-          />
-        ) : null}
+
+        <div className="flex min-h-[48px] items-center justify-between gap-3 border-b border-[#e6e4df] px-5">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              className="inline-flex h-8 items-center gap-2 rounded-full bg-[#efeeeb] px-3 text-[15px] font-semibold text-[#37352f]"
+              type="button"
+            >
+              <Table2 className="h-4 w-4" />
+              <span>Table</span>
+            </button>
+          </div>
+          <span className="shrink-0 text-[13px] font-medium text-[#a09d97]">
+            {visibleSuppliers.length}
+            {visibleSuppliers.length === suppliers.length
+              ? ""
+              : ` of ${suppliers.length}`}
+          </span>
+        </div>
+
+        <div className="flex min-h-[50px] flex-wrap items-center justify-between gap-2 border-b border-[#efeeeb] px-5 py-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {sorts.length > 0 ? (
+              sorts.map((sort) => (
+                <NotionControlChip
+                  key={sort.id}
+                  label={getSortFieldLabel(sort.field)}
+                  onRemove={() => removeSortRule(sort.id)}
+                  prefix={sort.direction === "asc" ? "↑" : "↓"}
+                />
+              ))
+            ) : null}
+            {filters.length > 0 ? (
+              <ActiveViewChips
+                filters={filters}
+                onFiltersChange={setFilters}
+                onSortsChange={setSorts}
+                sorts={[]}
+              />
+            ) : null}
+            <button
+              className="inline-flex h-8 items-center gap-1.5 rounded-[6px] px-2 text-[15px] font-medium text-[#8b8781] transition-colors hover:bg-[#f5f4f2] hover:text-[#37352f]"
+              onClick={(event) => openToolbarMenu("filter", event.currentTarget)}
+              type="button"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Filter</span>
+            </button>
+          </div>
+          {hasCustomView ? (
+            <button
+              className="h-8 rounded-[6px] px-2 text-[13px] font-medium text-[#78746e] transition-colors hover:bg-[#f1f1ef] hover:text-[#37352f]"
+              onClick={resetView}
+              type="button"
+            >
+              Reset
+            </button>
+          ) : null}
+        </div>
       </div>
-      <div className="overflow-hidden">
-        <table className="w-full table-fixed border-collapse text-left text-sm">
+      <div className="relative z-0 max-h-[calc(100vh-6rem)] max-w-full overflow-auto">
+        <table className="w-full min-w-[1320px] table-fixed border-collapse text-left text-sm">
           <colgroup>
-            <col className="w-[24%]" />
-            <col className="w-[12%]" />
-            <col className="w-[13%]" />
-            <col className="w-[12%]" />
-            <col className="w-[17%]" />
-            <col className="w-[13%]" />
-            <col className="w-[9%]" />
+            {visibleColumns.map((column) => (
+              <col className={column.widthClassName} key={column.id} />
+            ))}
           </colgroup>
-          <thead className="sticky top-0 bg-zinc-100 text-xs uppercase text-zinc-500">
+          <thead className="bg-zinc-100 text-xs uppercase text-zinc-500">
             <tr>
-              <th className="px-3 py-3 font-semibold">Application</th>
-              <th className="px-3 py-3 font-semibold">Pricing</th>
-              <th className="px-3 py-3 font-semibold">Last SAML Login</th>
-              <th className="px-3 py-3 font-semibold">Login Users</th>
-              <th className="px-3 py-3 font-semibold">Utilization</th>
-              <th className="px-3 py-3 font-semibold">Login Frequency</th>
-              <th className="px-3 py-3 font-semibold">Confidence</th>
+              {visibleColumns.map((column) => (
+                <IdentityColumnHeader
+                  column={column}
+                  key={column.id}
+                  label={getColumnLabel(column, columnSettings)}
+                  onOpen={openColumnHeaderMenu}
+                  sorted={sorts.some((sort) => sort.field === column.sortField)}
+                />
+              ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
             {visibleSuppliers.length > 0 ? (
               visibleSuppliers.map((supplier) => (
-                <UsageDashboardRow key={supplier.supplierId} supplier={supplier} />
+                <UsageDashboardRow
+                  columns={visibleColumns}
+                  key={supplier.supplierId}
+                  supplier={supplier}
+                />
               ))
             ) : (
               <tr>
-                <td className="px-5 py-6 text-center text-zinc-500" colSpan={7}>
+                <td
+                  className="px-5 py-6 text-center text-zinc-500"
+                  colSpan={visibleColumns.length}
+                >
                   {suppliers.length > 0
                     ? "No apps match these filters."
                     : "No Google identity signals matched to suppliers yet."}
@@ -907,43 +1262,362 @@ export function SupplierIdentitySignalsTable({
           </tbody>
         </table>
       </div>
+      {activeColumn ? (
+        <ColumnHeaderMenu
+          column={activeColumn}
+          label={getColumnLabel(activeColumn, columnSettings)}
+          menuRef={columnMenuRef}
+          onFilter={addColumnFilter}
+          onHide={(columnId) => setColumnVisibility(columnId, false)}
+          onLabelChange={updateColumnLabel}
+          onSort={setColumnSort}
+          position={columnMenuPosition}
+          canHide={visibleColumns.length > 1}
+        />
+      ) : null}
     </section>
   );
 }
 
-function ToolbarControlButton({
-  active,
-  compact = false,
-  expanded,
+function IdentityColumnHeader({
+  column,
+  label,
+  onOpen,
+  sorted,
+}: {
+  column: IdentityColumnConfig;
+  label: string;
+  onOpen: (columnId: IdentityColumnId, element: HTMLButtonElement) => void;
+  sorted: boolean;
+}) {
+  const Icon = column.Icon;
+
+  return (
+    <th className="group/column sticky top-0 z-10 bg-zinc-100 px-1 py-1.5 font-semibold shadow-[inset_0_-1px_0_rgb(228_228_231)]">
+      <button
+        aria-haspopup="menu"
+        className={`flex h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-[5px] px-2 text-left text-xs uppercase text-zinc-500 transition-colors hover:bg-[#e9e8e5] hover:text-[#37352f] ${
+          sorted ? "bg-[#efeeeb] text-[#5f5b55]" : ""
+        }`}
+        onClick={(event) => onOpen(column.id, event.currentTarget)}
+        type="button"
+      >
+        <Icon className="h-3.5 w-3.5 shrink-0 text-[#8b8781]" />
+        <span className="truncate">{label}</span>
+      </button>
+    </th>
+  );
+}
+
+function ColumnHeaderMenu({
+  canHide,
+  column,
+  label,
+  menuRef,
+  onFilter,
+  onHide,
+  onLabelChange,
+  onSort,
+  position,
+}: {
+  canHide: boolean;
+  column: IdentityColumnConfig;
+  label: string;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  onFilter: (column: IdentityColumnConfig) => void;
+  onHide: (columnId: IdentityColumnId) => void;
+  onLabelChange: (columnId: IdentityColumnId, label: string) => void;
+  onSort: (
+    column: IdentityColumnConfig,
+    direction: IdentitySortDirection,
+  ) => void;
+  position: { left: number; top: number };
+}) {
+  const canSort = Boolean(column.sortField);
+  const Icon = column.Icon;
+
+  return (
+    <div
+      className="fixed z-[10000] w-[318px] rounded-[12px] border border-[#e6e4e1] bg-white p-1.5 text-[15px] text-[#2f2e2b] shadow-[0_12px_32px_rgba(15,15,15,0.18)]"
+      ref={menuRef}
+      role="menu"
+      style={{ left: position.left, top: position.top }}
+    >
+      <div className="grid grid-cols-[34px_minmax(0,1fr)] items-center gap-1 px-1 pb-1">
+        <div className="flex h-9 w-9 items-center justify-center rounded-[7px] border border-[#e6e4e1] text-[17px] font-semibold text-[#78746e]">
+          <Icon className="h-4 w-4" />
+        </div>
+        <input
+          autoFocus
+          className="h-9 min-w-0 rounded-[8px] border-2 border-[#2f7cf6] bg-white px-2.5 text-[15px] font-medium leading-none text-[#37352f] outline-none placeholder:text-[#aaa7a2]"
+          onChange={(event) => onLabelChange(column.id, event.target.value)}
+          value={label}
+        />
+      </div>
+      <div className="mx-2 my-1 h-px bg-[#e5e3df]" />
+      <ColumnMenuButton
+        icon={<FilterIcon />}
+        label="Filter"
+        onClick={() => onFilter(column)}
+      />
+      <ColumnMenuButton
+        disabled={!canSort}
+        icon={<SortIcon />}
+        label="Sort ascending"
+        onClick={() => onSort(column, "asc")}
+      />
+      <ColumnMenuButton
+        disabled={!canSort}
+        icon={<SortIcon />}
+        label="Sort descending"
+        onClick={() => onSort(column, "desc")}
+      />
+      <div className="mx-2 my-1 h-px bg-[#e5e3df]" />
+      <ColumnMenuButton
+        disabled={!canHide}
+        icon={<EyeOffIcon />}
+        label={canHide ? "Hide column" : "Keep one column visible"}
+        onClick={() => onHide(column.id)}
+      />
+    </div>
+  );
+}
+
+function ColumnMenuButton({
+  disabled = false,
   icon,
   label,
   onClick,
 }: {
-  active: boolean;
-  compact?: boolean;
-  expanded: boolean;
+  disabled?: boolean;
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
 }) {
   return (
     <button
+      className="grid h-9 w-full grid-cols-[32px_minmax(0,1fr)] items-center rounded-[7px] px-2 text-left text-[15px] font-normal text-[#37352f] transition-colors hover:bg-[#efeeeb] disabled:cursor-not-allowed disabled:text-[#b9b6b0] disabled:hover:bg-transparent"
+      disabled={disabled}
+      onClick={onClick}
+      role="menuitem"
+      type="button"
+    >
+      <span className="flex items-center justify-center text-[#78746e]">
+        {icon}
+      </span>
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+function ColumnVisibilityPopover({
+  columnSettings,
+  columns,
+  onShowAll,
+  onVisibilityChange,
+  position,
+  visibleColumnsCount,
+}: {
+  columnSettings: IdentityColumnSettings;
+  columns: IdentityColumnConfig[];
+  onShowAll: () => void;
+  onVisibilityChange: (columnId: IdentityColumnId, visible: boolean) => void;
+  position: { left: number; top: number };
+  visibleColumnsCount: number;
+}) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredColumns = columns.filter((column) =>
+    getColumnLabel(column, columnSettings)
+      .toLowerCase()
+      .includes(normalizedQuery),
+  );
+  const shownColumns = filteredColumns.filter(
+    (column) => columnSettings[column.id]?.visible ?? true,
+  );
+  const hiddenColumns = filteredColumns.filter(
+    (column) => !(columnSettings[column.id]?.visible ?? true),
+  );
+
+  return (
+    <div
+      className="fixed z-[10000] w-[336px] rounded-[12px] border border-[#e6e4e1] bg-white p-1.5 text-[14px] text-[#2f2e2b] shadow-[0_12px_32px_rgba(15,15,15,0.18)]"
+      style={{ left: position.left, top: position.top }}
+    >
+      <div className="px-1 pb-1">
+        <div className="px-1 pb-2 text-[15px] font-semibold text-[#37352f]">
+          Property visibility
+        </div>
+        <div className="relative">
+          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[#aaa7a2]" />
+          <input
+            autoFocus
+            className="h-9 w-full rounded-[8px] border-2 border-[#2f7cf6] bg-white pl-8 pr-2.5 text-[15px] text-[#37352f] outline-none placeholder:text-[#aaa7a2]"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search for a property..."
+            value={query}
+          />
+        </div>
+      </div>
+      <ColumnVisibilitySection
+        actionLabel="Hide all"
+        columnSettings={columnSettings}
+        columns={shownColumns}
+        empty="No visible properties"
+        onAction={() => {
+          for (const column of shownColumns.slice(1)) {
+            onVisibilityChange(column.id, false);
+          }
+        }}
+        onVisibilityChange={onVisibilityChange}
+        title="Shown in table"
+        visible
+        visibleColumnsCount={visibleColumnsCount}
+      />
+      <ColumnVisibilitySection
+        actionLabel="Show all"
+        columnSettings={columnSettings}
+        columns={hiddenColumns}
+        empty="No hidden properties"
+        onAction={onShowAll}
+        onVisibilityChange={onVisibilityChange}
+        title="Hidden in table"
+        visible={false}
+        visibleColumnsCount={visibleColumnsCount}
+      />
+    </div>
+  );
+}
+
+function ColumnVisibilitySection({
+  actionLabel,
+  columnSettings,
+  columns,
+  empty,
+  onAction,
+  onVisibilityChange,
+  title,
+  visible,
+  visibleColumnsCount,
+}: {
+  actionLabel: string;
+  columnSettings: IdentityColumnSettings;
+  columns: IdentityColumnConfig[];
+  empty: string;
+  onAction: () => void;
+  onVisibilityChange: (columnId: IdentityColumnId, visible: boolean) => void;
+  title: string;
+  visible: boolean;
+  visibleColumnsCount: number;
+}) {
+  return (
+    <div className="px-1 py-1.5">
+      <div className="flex h-8 items-center justify-between px-1">
+        <span className="text-[13px] font-semibold text-[#78746e]">{title}</span>
+        {columns.length > 0 ? (
+          <button
+            className="rounded-[5px] px-1.5 py-1 text-[13px] font-medium text-[#1f7ae0] hover:bg-[#edf5ff]"
+            onClick={onAction}
+            type="button"
+          >
+            {actionLabel}
+          </button>
+        ) : null}
+      </div>
+      {columns.length > 0 ? (
+        columns.map((column) => {
+          const Icon = column.Icon;
+
+          return (
+            <button
+              className="grid h-9 w-full grid-cols-[24px_28px_minmax(0,1fr)_28px] items-center rounded-[7px] px-1 text-left text-[15px] text-[#37352f] hover:bg-[#efeeeb]"
+              key={column.id}
+              onClick={() => onVisibilityChange(column.id, !visible)}
+              type="button"
+            >
+              <DragHandleIcon />
+              <Icon className="h-4 w-4 text-[#78746e]" />
+              <span className="truncate">
+                {getColumnLabel(column, columnSettings)}
+              </span>
+              {visible ? (
+                <span
+                  className={
+                    visibleColumnsCount <= 1
+                      ? "text-[#d0ccc7]"
+                      : "text-[#78746e]"
+                  }
+                >
+                  <EyeIcon />
+                </span>
+              ) : (
+                <span className="text-[#8f8b85]">
+                  <EyeOffIcon />
+                </span>
+              )}
+            </button>
+          );
+        })
+      ) : (
+        <div className="px-2 py-2 text-[13px] text-[#aaa7a2]">{empty}</div>
+      )}
+    </div>
+  );
+}
+
+function NotionToolbarIconButton({
+  active,
+  children,
+  expanded,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+  expanded: boolean;
+  label: string;
+  onClick: React.MouseEventHandler<HTMLButtonElement>;
+}) {
+  return (
+    <button
       aria-label={label}
       aria-expanded={expanded}
-      className={`relative inline-flex h-7 items-center text-[14px] font-medium leading-none text-[#8b8781] transition-colors hover:bg-[#e9e8e5] ${
-        compact
-          ? "w-7 justify-center rounded-[5px] px-0"
-          : "gap-1.5 rounded-full bg-[#f1f1ef] px-2.5"
-      } ${expanded ? "bg-[#e9e8e5] text-[#5f5b55]" : ""}`}
+      className={`relative inline-flex h-8 w-8 items-center justify-center rounded-[6px] text-[#8b8781] transition-colors hover:bg-[#f1f1ef] hover:text-[#37352f] ${
+        expanded ? "bg-[#efeeeb] text-[#37352f]" : ""
+      }`}
       onClick={onClick}
       type="button"
     >
-      {icon}
-      {compact ? null : <span>{label}</span>}
+      {children}
       {active ? (
-        <span className="absolute -top-0.5 right-0.5 h-2 w-2 rounded-full bg-[#d9822b]" />
+        <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[#2f7cf6]" />
       ) : null}
     </button>
+  );
+}
+
+function NotionControlChip({
+  label,
+  onRemove,
+  prefix,
+}: {
+  label: string;
+  onRemove: () => void;
+  prefix?: string;
+}) {
+  return (
+    <span className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-full bg-[#edf5ff] px-2.5 text-[15px] font-medium text-[#2f7cf6]">
+      {prefix ? <span className="text-[17px] leading-none">{prefix}</span> : null}
+      <span className="truncate">{label}</span>
+      <button
+        aria-label={`Remove ${label}`}
+        className="rounded-[4px] p-0.5 text-[#6b9de8] hover:bg-[#dcecff] hover:text-[#2f7cf6]"
+        onClick={onRemove}
+        type="button"
+      >
+        <CloseIcon />
+      </button>
+    </span>
   );
 }
 
@@ -953,6 +1627,7 @@ function FilterBuilderPopover({
   onClear,
   onRemove,
   onUpdate,
+  position,
 }: {
   filters: IdentityFilterRule[];
   onAdd: (property?: IdentityFilterProperty) => void;
@@ -962,6 +1637,7 @@ function FilterBuilderPopover({
     id: string,
     updates: Partial<Omit<IdentityFilterRule, "id">>,
   ) => void;
+  position: { left: number; top: number };
 }) {
   const [openSelect, setOpenSelect] = useState<string | null>(null);
   const [propertyQuery, setPropertyQuery] = useState("");
@@ -970,7 +1646,10 @@ function FilterBuilderPopover({
   );
 
   return (
-    <div className="absolute left-0 top-9 z-[9999] w-[352px] max-w-[calc(100vw-2rem)] rounded-[12px] border border-[#e6e4e1] bg-white p-1.5 text-[14px] text-[#2f2e2b] shadow-[0_8px_24px_rgba(15,15,15,0.14)]">
+    <div
+      className="fixed z-[10000] w-[352px] max-w-[calc(100vw-2rem)] rounded-[12px] border border-[#e6e4e1] bg-white p-1.5 text-[14px] text-[#2f2e2b] shadow-[0_12px_32px_rgba(15,15,15,0.18)]"
+      style={{ left: position.left, top: position.top }}
+    >
       <input
         autoFocus
         className="mb-1.5 h-9 w-full rounded-[8px] border-2 border-[#2f7cf6] bg-white px-2.5 text-[15px] font-normal leading-none text-[#37352f] outline-none placeholder:text-[#aaa7a2]"
@@ -979,23 +1658,25 @@ function FilterBuilderPopover({
         value={propertyQuery}
       />
       <div className="flex flex-col gap-0.5 px-0.5">
-        {filteredProperties.map((option, index) => (
-          <button
-            className={`grid h-9 grid-cols-[30px_minmax(0,1fr)] items-center rounded-[7px] px-2 text-left transition-colors hover:bg-[#efeeeb] ${
-              index === 0 ? "bg-[#efeeeb]" : ""
-            }`}
-            key={option.value}
-            onClick={() => onAdd(option.value as IdentityFilterProperty)}
-            type="button"
-          >
-            <span className="text-[18px] font-semibold leading-none text-[#37352f]">
-              {option.icon}
-            </span>
-            <span className="truncate text-[15px] font-normal tracking-normal text-[#37352f]">
-              {option.label}
-            </span>
-          </button>
-        ))}
+        {filteredProperties.map((option, index) => {
+          const Icon = option.Icon;
+
+          return (
+            <button
+              className={`grid h-9 grid-cols-[30px_minmax(0,1fr)] items-center rounded-[7px] px-2 text-left transition-colors hover:bg-[#efeeeb] ${
+                index === 0 ? "bg-[#efeeeb]" : ""
+              }`}
+              key={option.value}
+              onClick={() => onAdd(option.value as IdentityFilterProperty)}
+              type="button"
+            >
+              <Icon className="h-4 w-4 text-[#37352f]" />
+              <span className="truncate text-[15px] font-normal tracking-normal text-[#37352f]">
+                {option.label}
+              </span>
+            </button>
+          );
+        })}
       </div>
       <div className="mx-2 my-1.5 h-px bg-[#e5e3df]" />
       <button
@@ -1152,18 +1833,23 @@ function SortBuilderPopover({
   onClear,
   onRemove,
   onUpdate,
+  position,
   sorts,
 }: {
   onAdd: () => void;
   onClear: () => void;
   onRemove: (id: string) => void;
   onUpdate: (id: string, updates: Partial<Omit<IdentitySortRule, "id">>) => void;
+  position: { left: number; top: number };
   sorts: IdentitySortRule[];
 }) {
   const [openSelect, setOpenSelect] = useState<string | null>(null);
 
   return (
-    <div className="absolute right-0 top-9 z-[9999] w-[352px] rounded-[12px] border border-[#e6e4e1] bg-white p-1.5 text-[13px] text-[#37352f] shadow-[0_8px_24px_rgba(15,15,15,0.14)]">
+    <div
+      className="fixed z-[10000] w-[352px] rounded-[12px] border border-[#e6e4e1] bg-white p-1.5 text-[13px] text-[#37352f] shadow-[0_12px_32px_rgba(15,15,15,0.18)]"
+      style={{ left: position.left, top: position.top }}
+    >
       <div className="px-2 py-1 text-[12px] font-medium text-[#78746e]">
         Sort
       </div>
@@ -1335,7 +2021,7 @@ function ActiveViewChips({
   });
 
   return (
-    <div className="flex flex-wrap gap-1 border-t border-[#efeeeb] px-3 py-1.5">
+    <div className="flex min-w-0 flex-wrap gap-2">
       {filterChips.map((chip) => (
         <ViewChip
           key={chip.id}
@@ -1372,11 +2058,11 @@ function ViewChip({
   onRemove: () => void;
 }) {
   return (
-    <span className="inline-flex h-6 max-w-full items-center gap-1 rounded-[5px] bg-[#f1f1ef] px-2 text-[12px] font-medium text-[#78746e]">
+    <span className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-full bg-[#f1f1ef] px-2.5 text-[15px] font-medium text-[#78746e]">
       <span className="truncate">{label}</span>
       <button
         aria-label={`Remove ${label}`}
-        className="rounded-[3px] p-0.5 text-[#aaa7a2] hover:bg-[#e5e3df] hover:text-[#37352f]"
+        className="rounded-[4px] p-0.5 text-[#aaa7a2] hover:bg-[#e5e3df] hover:text-[#37352f]"
         onClick={onRemove}
         type="button"
       >
@@ -1455,118 +2141,72 @@ function getNextSortField(sorts: IdentitySortRule[]): IdentitySortField {
   return (option?.value ?? "application") as IdentitySortField;
 }
 
+function getColumnLabel(
+  column: IdentityColumnConfig,
+  columnSettings: IdentityColumnSettings,
+): string {
+  const label = columnSettings[column.id]?.label.trim();
+
+  return label || column.defaultLabel;
+}
+
 function SortIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      fill="none"
-      viewBox="0 0 16 16"
-    >
-      <path
-        d="M5 3.25v9.5m0 0L2.75 10.5M5 12.75l2.25-2.25M11 12.75v-9.5m0 0L8.75 5.5M11 3.25l2.25 2.25"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.25"
-      />
-    </svg>
-  );
+  return <ArrowUpDown aria-hidden="true" className="h-3.5 w-3.5" />;
+}
+
+function FilterIcon() {
+  return <ListFilter aria-hidden="true" className="h-3.5 w-3.5" />;
 }
 
 function SearchIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      className={`h-3.5 w-3.5 ${className}`}
-      fill="none"
-      viewBox="0 0 16 16"
-    >
-      <path
-        d="m11.25 11.25 2 2M7.5 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Z"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.35"
-      />
-    </svg>
-  );
+  return <Search aria-hidden="true" className={`h-3.5 w-3.5 ${className}`} />;
+}
+
+function DragHandleIcon() {
+  return <GripVertical aria-hidden="true" className="h-4 w-4 text-[#b9b6b0]" />;
+}
+
+function EyeIcon() {
+  return <Eye aria-hidden="true" className="h-4 w-4" />;
+}
+
+function EyeOffIcon() {
+  return <EyeOff aria-hidden="true" className="h-4 w-4" />;
 }
 
 function PlusIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      fill="none"
-      viewBox="0 0 16 16"
-    >
-      <path
-        d="M8 3.5v9M3.5 8h9"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.35"
-      />
-    </svg>
-  );
+  return <Plus aria-hidden="true" className="h-3.5 w-3.5" />;
 }
 
 function ChevronDownIcon() {
   return (
-    <svg
+    <ChevronDown
       aria-hidden="true"
       className="h-3 w-3 shrink-0 text-zinc-400"
-      fill="none"
-      viewBox="0 0 16 16"
-    >
-      <path
-        d="m5 6.5 3 3 3-3"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.35"
-      />
-    </svg>
+    />
   );
 }
 
 function CheckIcon() {
   return (
-    <svg
+    <Check
       aria-hidden="true"
       className="h-3.5 w-3.5 shrink-0 text-blue-600"
-      fill="none"
-      viewBox="0 0 16 16"
-    >
-      <path
-        d="m3.75 8.25 2.5 2.5 6-6"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.5"
-      />
-    </svg>
+    />
   );
 }
 
 function CloseIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3 w-3"
-      fill="none"
-      viewBox="0 0 16 16"
-    >
-      <path
-        d="m5 5 6 6m0-6-6 6"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.5"
-      />
-    </svg>
-  );
+  return <X aria-hidden="true" className="h-3 w-3" />;
 }
 
-function UsageDashboardRow({ supplier }: { supplier: IdentitySupplierRow }) {
+function UsageDashboardRow({
+  columns,
+  supplier,
+}: {
+  columns: IdentityColumnConfig[];
+  supplier: IdentitySupplierRow;
+}) {
   const hasSamlLoginSignals = supplier.identityMode === "saml";
   const utilization = computeUtilization(
     hasSamlLoginSignals ? supplier.usersWithSignal90d : 0,
@@ -1580,6 +2220,35 @@ function UsageDashboardRow({ supplier }: { supplier: IdentitySupplierRow }) {
 
   return (
     <tr className="bg-white">
+      {columns.map((column) => (
+        <IdentityDashboardCell
+          columnId={column.id}
+          hasSamlLoginSignals={hasSamlLoginSignals}
+          key={column.id}
+          loginFrequency={loginFrequency}
+          supplier={supplier}
+          utilization={utilization}
+        />
+      ))}
+    </tr>
+  );
+}
+
+function IdentityDashboardCell({
+  columnId,
+  hasSamlLoginSignals,
+  loginFrequency,
+  supplier,
+  utilization,
+}: {
+  columnId: IdentityColumnId;
+  hasSamlLoginSignals: boolean;
+  loginFrequency: LoginFrequency;
+  supplier: IdentitySupplierRow;
+  utilization: ReturnType<typeof computeUtilization>;
+}) {
+  if (columnId === "application") {
+    return (
       <td className="px-3 py-4 align-top">
         <div className="flex min-w-0 items-start gap-3">
           <ApplicationLogo
@@ -1603,20 +2272,60 @@ function UsageDashboardRow({ supplier }: { supplier: IdentitySupplierRow }) {
           </div>
         </div>
       </td>
+    );
+  }
+
+  if (columnId === "pricingType") {
+    return (
       <td className="px-3 py-4 align-top text-zinc-700">
-        <PricingCell
+        <PricingTypeCell
           monthlySpend={supplier.monthlySpend}
+          paidSeats={supplier.paidSeats}
           pricingSource={supplier.pricingSource}
         />
       </td>
+    );
+  }
+
+  if (columnId === "unitPrice") {
+    return (
+      <td className="px-3 py-4 align-top text-zinc-700">
+        <UnitPriceCell
+          monthlySpend={supplier.monthlySpend}
+          paidSeats={supplier.paidSeats}
+        />
+      </td>
+    );
+  }
+
+  if (columnId === "totalPricing") {
+    return (
+      <td className="px-3 py-4 align-top text-zinc-700">
+        <TotalPricingCell monthlySpend={supplier.monthlySpend} />
+      </td>
+    );
+  }
+
+  if (columnId === "lastSignalAt") {
+    return (
       <td className="px-3 py-4 align-top text-zinc-700">
         {formatRelativeLastUsed(supplier.lastSignalAt)}
       </td>
+    );
+  }
+
+  if (columnId === "loginUsers") {
+    return (
       <td className="px-3 py-4 align-top text-zinc-700">
         {supplier.paidSeats
           ? `${supplier.usersWithSignal90d} / ${supplier.paidSeats}`
           : `${supplier.usersWithSignal90d} login users`}
       </td>
+    );
+  }
+
+  if (columnId === "utilization") {
+    return (
       <td className="px-3 py-4 align-top">
         <UsageProgressBar
           unavailableLabel={
@@ -1625,23 +2334,98 @@ function UsageDashboardRow({ supplier }: { supplier: IdentitySupplierRow }) {
           utilization={utilization}
         />
       </td>
+    );
+  }
+
+  if (columnId === "loginFrequency") {
+    return (
       <td className="px-3 py-4 align-top">
         <LoginFrequencyBar frequency={loginFrequency} />
       </td>
-      <td className="px-3 py-4 align-top">
-        <UsageConfidenceBadge confidence={supplier.confidence} />
-      </td>
-    </tr>
+    );
+  }
+
+  return (
+    <td className="px-3 py-4 align-top">
+      <UsageConfidenceBadge confidence={supplier.confidence} />
+    </td>
   );
 }
 
-function PricingCell({
+function PricingTypeCell({
   monthlySpend,
+  paidSeats,
   pricingSource,
 }: {
   monthlySpend: number | null;
+  paidSeats: number | null;
   pricingSource: IdentitySupplierRow["pricingSource"];
 }) {
+  if (monthlySpend === null) {
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="font-medium text-zinc-500">Unknown</span>
+        <span className="text-xs text-zinc-500">No pricing</span>
+      </div>
+    );
+  }
+
+  const hasSeatCount = paidSeats !== null && paidSeats > 0;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="font-medium text-zinc-950">
+        {hasSeatCount ? "Per seat" : "Contract"}
+      </span>
+      <span className="text-xs text-zinc-500">
+        {hasSeatCount ? `${paidSeats} seats` : formatPricingSource(pricingSource)}
+      </span>
+      {pricingSource === "shared_contract" ? (
+        <span className="w-fit rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">
+          Shared
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function UnitPriceCell({
+  monthlySpend,
+  paidSeats,
+}: {
+  monthlySpend: number | null;
+  paidSeats: number | null;
+}) {
+  if (monthlySpend === null) {
+    return <span className="text-zinc-500">-</span>;
+  }
+
+  if (paidSeats !== null && paidSeats > 0) {
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="whitespace-nowrap font-medium text-zinc-950">
+          {formatMoney(monthlySpend / paidSeats)}
+        </span>
+        <span className="whitespace-nowrap text-xs text-zinc-500">
+          / seat / mo
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="whitespace-nowrap font-medium text-zinc-950">
+        {formatMoney(monthlySpend)}
+      </span>
+      <span className="whitespace-nowrap text-xs text-zinc-500">
+        / contract / mo
+      </span>
+    </div>
+  );
+}
+
+function TotalPricingCell({ monthlySpend }: { monthlySpend: number | null }) {
   if (monthlySpend === null) {
     return <span className="text-zinc-500">-</span>;
   }
@@ -1655,13 +2439,26 @@ function PricingCell({
       <span className="whitespace-nowrap text-xs text-zinc-500">
         {formatMoney(monthlySpend * 12)} / yr
       </span>
-      {pricingSource === "shared_contract" ? (
-        <span className="w-fit rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">
-          Shared contract
-        </span>
-      ) : null}
     </div>
   );
+}
+
+function formatPricingSource(
+  pricingSource: IdentitySupplierRow["pricingSource"],
+): string {
+  if (pricingSource === "contract") {
+    return "Linked contract";
+  }
+
+  if (pricingSource === "shared_contract") {
+    return "Shared contract";
+  }
+
+  if (pricingSource === "supplier") {
+    return "Supplier spend";
+  }
+
+  return "Pricing source";
 }
 
 function ApplicationLogo({
