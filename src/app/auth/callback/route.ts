@@ -12,6 +12,10 @@ export async function GET(request: NextRequest) {
   const next = getSafeNextPath(requestUrl.searchParams.get("next"));
 
   if (!code) {
+    logAuthCallbackWarning("missing_code", request, {
+      oauthError: requestUrl.searchParams.get("error"),
+    });
+
     return redirectToLogin(request, "auth_callback_failed", next);
   }
 
@@ -22,6 +26,12 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error || !user) {
+    logAuthCallbackWarning("exchange_failed", request, {
+      errorMessage: sanitizeAuthErrorMessage(error?.message),
+      errorName: error?.name,
+      errorStatus: getAuthErrorStatus(error),
+    });
+
     return redirectToLogin(request, "auth_callback_failed", next);
   }
 
@@ -41,6 +51,43 @@ export async function GET(request: NextRequest) {
   }
 
   return Response.redirect(new URL(next, request.url));
+}
+
+function logAuthCallbackWarning(
+  reason: "exchange_failed" | "missing_code",
+  request: NextRequest,
+  details: Record<string, string | null | undefined>,
+) {
+  const url = new URL(request.url);
+
+  console.warn("auth_callback_failed", {
+    details,
+    host: url.host,
+    reason,
+  });
+}
+
+function sanitizeAuthErrorMessage(message: string | undefined): string | null {
+  if (!message) {
+    return null;
+  }
+
+  return message
+    .replace(/code=[^&\s]+/gi, "code=[redacted]")
+    .replace(/access_token=[^&\s]+/gi, "access_token=[redacted]")
+    .replace(/refresh_token=[^&\s]+/gi, "refresh_token=[redacted]");
+}
+
+function getAuthErrorStatus(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("status" in error)) {
+    return null;
+  }
+
+  const status = (error as { status?: unknown }).status;
+
+  return typeof status === "number" || typeof status === "string"
+    ? String(status)
+    : null;
 }
 
 function getSafeNextPath(value: string | null): string {
