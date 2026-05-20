@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import Link from "next/link";
 import { AppShell } from "@/app/app/_components/app-shell";
+import { ContractReviewActions } from "@/app/app/contracts/_components/contract-review-actions";
 import { ContractsPipeline } from "@/app/app/contracts/_components/contracts-pipeline";
 import { SyncPennylaneButton } from "@/app/app/contracts/_components/sync-pennylane-button";
 import {
@@ -10,7 +11,6 @@ import {
 } from "@/lib/frontend-cache";
 import {
   buildContractSummary,
-  getContractRecommendedAction,
   getUsageContext,
   type ContractRow,
   type ContractGapRow,
@@ -287,9 +287,9 @@ function GapTable({
       <div className="divide-y divide-zinc-100">
         {rows.length > 0 ? (
           rows.slice(0, 8).map((row) => (
-            <div className="grid gap-3 px-5 py-4 text-sm" key={row.linkId}>
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 items-center gap-3">
+            <div className="grid gap-4 px-5 py-4 text-sm" key={row.linkId}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
                   <GapLogo
                     logoUrl={row.logoUrl}
                     name={row.vendorName ?? row.appName}
@@ -303,27 +303,53 @@ function GapTable({
                     </p>
                   </div>
                 </div>
-                <span className="shrink-0 rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600">
+                <span
+                  className={`w-fit shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${getGapStatusClassName(row)}`}
+                >
                   {row.contractStatus === "possibly_cancelled"
                     ? "Possible cancellation"
                     : formatEnum(row.matchStatus)}
                 </span>
               </div>
               {!minimal ? (
-                <p className="leading-6 text-zinc-600">{row.matchReason}</p>
-              ) : null}
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500">
-                <span>{row.usersWithSignal90d} users 90d</span>
-                {!minimal ? <span>{getUsageContext(row)}</span> : null}
-                {!minimal || row.matchScore > 0 ? (
-                  <span>{Math.round(row.matchScore * 100)}% match</span>
-                ) : null}
-              </div>
-              {!minimal ? (
-                <p className="text-sm font-medium text-zinc-700">
-                  {getContractRecommendedAction(row)}
+                <p className="leading-6 text-zinc-600">
+                  {getCompactReviewReason(row)}
                 </p>
               ) : null}
+              {!minimal ? (
+                <>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <ReviewMetric
+                      label="Users 90d"
+                      value={String(row.usersWithSignal90d)}
+                    />
+                    <ReviewMetric label="Usage" value={getUsageContext(row)} />
+                    <ReviewMetric
+                      label="Match"
+                      value={`${Math.round(row.matchScore * 100)}%`}
+                    />
+                  </div>
+                  <ContractReviewActions
+                    contractId={row.contractId}
+                    linkId={row.linkId}
+                    matchScore={row.matchScore}
+                    reviewKind={getReviewActionKind(row)}
+                  />
+                </>
+              ) : (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-zinc-500">
+                  <span>{row.usersWithSignal90d} users 90d</span>
+                  {row.matchScore > 0 ? (
+                    <span>{Math.round(row.matchScore * 100)}% match</span>
+                  ) : null}
+                  <ContractReviewActions
+                    contractId={row.contractId}
+                    linkId={row.linkId}
+                    matchScore={row.matchScore}
+                    reviewKind={getReviewActionKind(row)}
+                  />
+                </div>
+              )}
             </div>
           ))
         ) : (
@@ -332,6 +358,73 @@ function GapTable({
       </div>
     </section>
   );
+}
+
+function ReviewMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-zinc-100 bg-zinc-50 px-3 py-2">
+      <p className="text-[11px] font-medium uppercase text-zinc-400">{label}</p>
+      <p className="mt-1 truncate text-xs font-medium text-zinc-700">{value}</p>
+    </div>
+  );
+}
+
+function getReviewActionKind(
+  row: ContractGapRow,
+): "missing_contract" | "possible_cancellation" | "possible_match" {
+  if (row.contractStatus === "possibly_cancelled") {
+    return "possible_cancellation";
+  }
+
+  if (row.matchStatus === "missing_contract") {
+    return "missing_contract";
+  }
+
+  return "possible_match";
+}
+
+function getGapStatusClassName(row: ContractGapRow): string {
+  if (row.contractStatus === "possibly_cancelled") {
+    return "bg-amber-50 text-amber-700 ring-1 ring-amber-200";
+  }
+
+  if (row.matchStatus === "missing_contract") {
+    return "bg-red-50 text-red-700 ring-1 ring-red-200";
+  }
+
+  if (row.matchStatus === "matched") {
+    return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
+  }
+
+  return "bg-zinc-100 text-zinc-600";
+}
+
+function getCompactReviewReason(row: ContractGapRow): string {
+  if (row.contractStatus === "possibly_cancelled") {
+    return compactPossibleCancellationReason(row.matchReason);
+  }
+
+  if (row.matchStatus === "missing_contract") {
+    return "Google identity signal found, but no Pennylane contract is linked.";
+  }
+
+  return row.matchReason;
+}
+
+function compactPossibleCancellationReason(reason: string): string {
+  const expectedDate = reason.match(/around (\d{4}-\d{2}-\d{2})/)?.[1];
+  const lastInvoiceDate = reason.match(/Last invoice was (\d{4}-\d{2}-\d{2})/)?.[1];
+
+  if (!expectedDate && !lastInvoiceDate) {
+    return reason;
+  }
+
+  return [
+    lastInvoiceDate ? `Last invoice ${formatNullableDate(lastInvoiceDate)}.` : null,
+    expectedDate ? `Expected next invoice ${formatNullableDate(expectedDate)}.` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function GapLogo({ logoUrl, name }: { logoUrl: string | null; name: string }) {

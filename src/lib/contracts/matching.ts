@@ -324,6 +324,29 @@ export function buildContractAppLinkRows({
 
     if (
       match.ssoSupplierId &&
+      hasManualIgnoredContractSupplierLink(
+        manualLinks,
+        contract.id,
+        match.ssoSupplierId,
+      )
+    ) {
+      links.push({
+        contract_id: contract.id,
+        matched_app_domain: null,
+        matched_app_name: null,
+        matched_by: "automatic",
+        match_reason: "Manual review ignored this SSO match.",
+        match_score: 0,
+        match_status: "orphan_contract",
+        organization_id: organizationId,
+        sso_supplier_id: null,
+        updated_at: updatedAt,
+      });
+      continue;
+    }
+
+    if (
+      match.ssoSupplierId &&
       hasManualLink(manualLinks, contract.id, match.ssoSupplierId)
     ) {
       markSupplierAndKnownEquivalentsAsLinked({
@@ -678,6 +701,19 @@ function hasManualLink(
       link.contract_id === contractId &&
       link.sso_supplier_id === supplierId &&
       link.match_status !== "ignored",
+  );
+}
+
+function hasManualIgnoredContractSupplierLink(
+  links: ExistingManualLink[],
+  contractId: string,
+  supplierId: string,
+): boolean {
+  return links.some(
+    (link) =>
+      link.contract_id === contractId &&
+      link.sso_supplier_id === supplierId &&
+      link.match_status === "ignored",
   );
 }
 

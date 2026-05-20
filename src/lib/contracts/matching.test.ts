@@ -167,6 +167,30 @@ test("creates orphan_contract when contract has no SSO app match", () => {
   assert.equal(links[1].match_status, "missing_contract");
 });
 
+test("does not recreate an ignored manual contract app match", () => {
+  const links = buildContractAppLinkRows({
+    aliases: [],
+    contracts: [contract({ id: "contract-openai", vendor_name: "OpenAI" })],
+    manualLinks: [
+      {
+        contract_id: "contract-openai",
+        match_status: "ignored",
+        sso_supplier_id: "supplier-openai",
+      },
+    ],
+    organizationId: "org",
+    suppliers: [
+      supplier({
+        id: "supplier-openai",
+        supplier_name: "OpenAI",
+      }),
+    ],
+  });
+
+  assert.equal(links[0].match_status, "orphan_contract");
+  assert.equal(links[0].match_reason, "Manual review ignored this SSO match.");
+});
+
 function contract(overrides: Partial<ContractForMatching> = {}): ContractForMatching {
   return {
     id: "contract-1",

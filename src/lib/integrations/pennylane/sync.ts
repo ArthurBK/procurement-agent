@@ -27,6 +27,7 @@ import {
 } from "@/lib/contracts/aiExtraction";
 import { rebuildContractAppLinks } from "@/lib/contracts/matching";
 import { applyContractLifecycleStatus } from "@/lib/contracts/lifecycle";
+import { applyManualContractReviewOverride } from "@/lib/contracts/reviewActions";
 import { resolveIdentitySupplierDomain } from "@/lib/integrations/google/matching";
 import { decryptSecret } from "@/lib/security/encryption";
 import {
@@ -1540,17 +1541,30 @@ async function upsertContracts({
   const invoiceByExternalId = new Map(
     invoiceRows.map((invoice) => [invoice.external_id, invoice]),
   );
+  const existingReviewBySourceExternalId =
+    await loadExistingContractReviewsBySourceExternalId({
+      organizationId,
+      sourceExternalIds: contracts.map((contract) => contract.sourceExternalId),
+      supabaseAdmin,
+    });
   const rows = contracts.map((contract) => {
     const invoice = invoiceByExternalId.get(contract.sourceDocumentExternalId);
+    const manualOverride = applyManualContractReviewOverride({
+      existingReview:
+        existingReviewBySourceExternalId.get(contract.sourceExternalId) ?? null,
+      nextFields: contract.extractedFields,
+      nextReason: contract.confidenceReason,
+      nextStatus: contract.status,
+    });
 
     return {
       billing_frequency: contract.billingFrequency,
       confidence: contract.confidence,
-      confidence_reason: contract.confidenceReason,
+      confidence_reason: manualOverride.confidenceReason,
       currency: contract.currency,
       current_period_end: contract.currentPeriodEnd,
       current_period_start: contract.currentPeriodStart,
-      extracted_fields_json: contract.extractedFields,
+      extracted_fields_json: manualOverride.extractedFields,
       last_invoice_amount_cents: contract.lastInvoiceAmountCents,
       last_synced_at: new Date().toISOString(),
       next_renewal_date: contract.nextRenewalDate,
@@ -1564,7 +1578,7 @@ async function upsertContracts({
       source_document_id: invoice?.id ?? null,
       source_external_id: contract.sourceExternalId,
       source_system: contract.sourceSystem,
-      status: contract.status,
+      status: manualOverride.status,
       updated_at: new Date().toISOString(),
       vendor_name: contract.vendorName,
     };
@@ -1588,6 +1602,61 @@ async function upsertContracts({
   }
 
   return data?.length ?? 0;
+}
+
+async function loadExistingContractReviewsBySourceExternalId({
+  organizationId,
+  sourceExternalIds,
+  supabaseAdmin,
+}: {
+  organizationId: string;
+  sourceExternalIds: string[];
+  supabaseAdmin: SupabaseAdminClient;
+}): Promise<
+  Map<
+    string,
+    {
+      confidenceReason: string;
+      extractedFields: Record<string, unknown>;
+      status: string;
+    }
+  >
+> {
+  const uniqueSourceExternalIds = Array.from(new Set(sourceExternalIds));
+
+  if (uniqueSourceExternalIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("contracts")
+    .select("source_external_id, confidence_reason, extracted_fields_json, status")
+    .eq("organization_id", organizationId)
+    .in("source_external_id", uniqueSourceExternalIds);
+
+  if (error) {
+    throw new Error(`Unable to load existing contract reviews: ${error.message}`);
+  }
+
+  return new Map(
+    ((data ?? []) as Array<{
+      confidence_reason: string | null;
+      extracted_fields_json: unknown;
+      source_external_id: string | null;
+      status: string | null;
+    }>)
+      .filter((row) => row.source_external_id)
+      .map((row) => [
+        row.source_external_id as string,
+        {
+          confidenceReason: row.confidence_reason ?? "",
+          extractedFields: isRecord(row.extracted_fields_json)
+            ? row.extracted_fields_json
+            : {},
+          status: row.status ?? "needs_review",
+        },
+      ]),
+  );
 }
 
 async function deleteContractsWithChangedSourceKeys({
@@ -1656,6 +1725,10 @@ async function deleteContractsWithChangedSourceKeys({
       `Unable to delete changed Pennylane contracts: ${deleteResult.error.message}`,
     );
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 async function pruneStalePennylaneContracts({
