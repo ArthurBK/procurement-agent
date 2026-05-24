@@ -12,10 +12,12 @@ import {
   Check,
   ChevronDown,
   CircleGauge,
+  Copy,
   Eye,
   EyeOff,
   GripVertical,
   Hash,
+  Link2,
   ListFilter,
   Percent,
   Plus,
@@ -70,6 +72,12 @@ type GoogleStatusResponse = {
   status: GoogleFrontendStatus;
   suppliersMatched: number;
   usersSynced: number;
+};
+
+type GoogleSyncLinkResponse = {
+  errors?: string[];
+  expiresAt: string;
+  url: string;
 };
 
 type IdentitySupplierRow = {
@@ -320,6 +328,9 @@ export function GoogleWorkspaceIntegrationCard({
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [isCreatingSyncLink, setIsCreatingSyncLink] = useState(false);
+  const [syncLink, setSyncLink] = useState<GoogleSyncLinkResponse | null>(null);
+  const [syncLinkCopied, setSyncLinkCopied] = useState(false);
 
   async function refreshStatus() {
     const response = await fetch("/api/integrations/google/status");
@@ -394,6 +405,48 @@ export function GoogleWorkspaceIntegrationCard({
     }
   }
 
+  async function createSyncLink() {
+    setActionError(null);
+    setIsCreatingSyncLink(true);
+    setSyncLinkCopied(false);
+
+    try {
+      const response = await fetch("/api/integrations/google/sync-links", {
+        method: "POST",
+      });
+      const result = (await response.json()) as GoogleSyncLinkResponse;
+
+      if (!response.ok) {
+        throw new Error(
+          result.errors?.[0] ?? "Unable to create Google Workspace sync link.",
+        );
+      }
+
+      setSyncLink(result);
+    } catch (error) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Unable to create Google Workspace sync link.",
+      );
+    } finally {
+      setIsCreatingSyncLink(false);
+    }
+  }
+
+  async function copySyncLink() {
+    if (!syncLink) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(syncLink.url);
+      setSyncLinkCopied(true);
+    } catch {
+      setActionError("Unable to copy the sync link.");
+    }
+  }
+
   const isConnected = status.status === "connected" || status.status === "syncing";
 
   return (
@@ -462,10 +515,52 @@ export function GoogleWorkspaceIntegrationCard({
               {actionError}
             </p>
           ) : null}
+          {syncLink ? (
+            <div className="flex max-w-3xl flex-col gap-2 border-l-2 border-emerald-500 pl-3">
+              <p className="text-sm font-medium text-zinc-800">
+                Sync link created
+              </p>
+              <p className="text-sm leading-6 text-zinc-600">
+                Valid until {formatNullableDate(syncLink.expiresAt)}.
+              </p>
+              <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+                <input
+                  className="h-10 min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-3 text-sm text-zinc-700"
+                  readOnly
+                  value={syncLink.url}
+                />
+                <button
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-800 transition-colors hover:bg-zinc-50"
+                  onClick={copySyncLink}
+                  type="button"
+                >
+                  {syncLinkCopied ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                  {syncLinkCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {!isConnected ? <ConnectGoogleWorkspaceButton /> : null}
+          {!isConnected ? (
+            <>
+              <ConnectGoogleWorkspaceButton />
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-800 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-400"
+                disabled={isCreatingSyncLink}
+                onClick={createSyncLink}
+                type="button"
+              >
+                <Link2 className="h-4 w-4" />
+                {isCreatingSyncLink ? "Creating..." : "Create sync link"}
+              </button>
+            </>
+          ) : null}
           {isConnected ? (
             <>
               <button

@@ -91,9 +91,11 @@ export async function runGoogleWorkspaceSmokeTest(accessToken: string) {
 }
 
 export async function runGoogleWorkspaceSync({
+  actorUserId = DEFAULT_ACTOR_USER_ID,
   organizationId,
   supabaseAdmin,
 }: {
+  actorUserId?: string | null;
   organizationId: string;
   supabaseAdmin: SupabaseAdminClient;
 }): Promise<GoogleWorkspaceSyncSummary> {
@@ -212,7 +214,7 @@ export async function runGoogleWorkspaceSync({
       .eq("id", integration.id);
     await createIntegrationAuditLog({
       action: "sync_completed",
-      actorUserId: DEFAULT_ACTOR_USER_ID,
+      actorUserId,
       integrationId: integration.id,
       metadata: {
         authorizedAppsSynced,

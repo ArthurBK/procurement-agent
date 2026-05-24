@@ -7,7 +7,10 @@ import {
   exchangeGoogleAuthorizationCode,
   parseGrantedScopes,
 } from "@/lib/integrations/google/oauth";
-import { runGoogleWorkspaceSmokeTest } from "@/lib/integrations/google/sync";
+import {
+  runGoogleWorkspaceSmokeTest,
+  runGoogleWorkspaceSync,
+} from "@/lib/integrations/google/sync";
 import { encryptSecret } from "@/lib/security/encryption";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getSupabaseUrl } from "@/lib/supabase/env";
@@ -19,6 +22,11 @@ type OAuthStateRow = {
   expires_at: string;
   organization_id: string;
   user_id: string | null;
+};
+
+type ExternalSyncLinkRow = {
+  id: string;
+  organization_id: string;
 };
 
 export async function GET(request: NextRequest) {
@@ -51,17 +59,51 @@ export async function GET(request: NextRequest) {
   }
 
   const oauthState = stateRow as unknown as OAuthStateRow;
+  const externalSyncLink = await loadExternalSyncLink({
+    state,
+    supabaseAdmin,
+  });
 
   if (oauthError) {
-    return redirectToGooglePage(request, `oauth_${oauthError}`);
+    await updateExternalSyncLinkError({
+      message: `Google OAuth failed: ${oauthError}`,
+      supabaseAdmin,
+      syncLink: externalSyncLink,
+    });
+
+    return redirectToConnectionResult(
+      request,
+      externalSyncLink,
+      `oauth_${oauthError}`,
+    );
   }
 
   if (!code) {
-    return redirectToGooglePage(request, "missing_code_or_state");
+    await updateExternalSyncLinkError({
+      message: "Google OAuth callback was missing an authorization code.",
+      supabaseAdmin,
+      syncLink: externalSyncLink,
+    });
+
+    return redirectToConnectionResult(
+      request,
+      externalSyncLink,
+      "missing_code_or_state",
+    );
   }
 
   if (oauthState.consumed_at || new Date(oauthState.expires_at) < new Date()) {
-    return redirectToGooglePage(request, "expired_state");
+    await updateExternalSyncLinkError({
+      message: "Google OAuth state was already used or expired.",
+      supabaseAdmin,
+      syncLink: externalSyncLink,
+    });
+
+    return redirectToConnectionResult(
+      request,
+      externalSyncLink,
+      "expired_state",
+    );
   }
 
   await supabaseAdmin
@@ -73,19 +115,39 @@ export async function GET(request: NextRequest) {
     const tokenResponse = await exchangeGoogleAuthorizationCode(code);
 
     if (!tokenResponse.access_token) {
-      return redirectToGooglePage(request, "missing_access_token");
+      await updateExternalSyncLinkError({
+        message: "Google did not return an access token.",
+        supabaseAdmin,
+        syncLink: externalSyncLink,
+      });
+
+      return redirectToConnectionResult(
+        request,
+        externalSyncLink,
+        "missing_access_token",
+      );
     }
 
     if (!tokenResponse.refresh_token) {
+      const message =
+        "Google did not return a refresh token. Reconnect with consent to grant offline access.";
       await upsertFailedIntegration({
-        lastError:
-          "Google did not return a refresh token. Reconnect with consent to grant offline access.",
+        lastError: message,
         organizationId: oauthState.organization_id,
         supabaseAdmin,
         userId: oauthState.user_id,
       });
+      await updateExternalSyncLinkError({
+        message,
+        supabaseAdmin,
+        syncLink: externalSyncLink,
+      });
 
-      return redirectToGooglePage(request, "missing_refresh_token");
+      return redirectToConnectionResult(
+        request,
+        externalSyncLink,
+        "missing_refresh_token",
+      );
     }
 
     const expiresAt = addSeconds(
@@ -119,7 +181,17 @@ export async function GET(request: NextRequest) {
       .single();
 
     if (integrationError || !integration) {
-      return redirectToGooglePage(request, "integration_save_failed");
+      await updateExternalSyncLinkError({
+        message: integrationError?.message ?? "Unable to save Google integration.",
+        supabaseAdmin,
+        syncLink: externalSyncLink,
+      });
+
+      return redirectToConnectionResult(
+        request,
+        externalSyncLink,
+        "integration_save_failed",
+      );
     }
 
     const integrationId = (integration as unknown as { id: string }).id;
@@ -149,34 +221,188 @@ export async function GET(request: NextRequest) {
         .eq("id", integrationId);
       await createIntegrationAuditLog({
         action: "smoke_test_failed",
-        actorUserId: oauthState.user_id,
+        actorUserId: externalSyncLink ? null : oauthState.user_id,
         integrationId,
         message,
         organizationId: oauthState.organization_id,
         provider: "google_workspace",
         supabaseAdmin,
       });
+      await updateExternalSyncLinkError({
+        message,
+        supabaseAdmin,
+        syncLink: externalSyncLink,
+      });
       revalidateGoogleFrontendCache(oauthState.organization_id);
 
-      return redirectToGooglePage(request, "permission_smoke_test_failed");
+      return redirectToConnectionResult(
+        request,
+        externalSyncLink,
+        "permission_smoke_test_failed",
+      );
+    }
+
+    if (externalSyncLink) {
+      const syncError = await runExternalGoogleWorkspaceSync({
+        integrationId,
+        organizationId: oauthState.organization_id,
+        supabaseAdmin,
+        syncLink: externalSyncLink,
+      });
+
+      if (syncError) {
+        return redirectToExternalSyncLinkComplete(request, "sync_failed");
+      }
+
+      return redirectToExternalSyncLinkComplete(request, "success");
     }
 
     revalidateGoogleFrontendCache(oauthState.organization_id);
 
     return redirectToGooglePage(request, null, "connected");
   } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Google Workspace connection failed.";
+
     await upsertFailedIntegration({
-      lastError:
-        error instanceof Error
-          ? error.message
-          : "Google Workspace connection failed.",
+      lastError: message,
       organizationId: oauthState.organization_id,
       supabaseAdmin,
       userId: oauthState.user_id,
     });
+    await updateExternalSyncLinkError({
+      message,
+      supabaseAdmin,
+      syncLink: externalSyncLink,
+    });
 
-    return redirectToGooglePage(request, "callback_failed");
+    return redirectToConnectionResult(
+      request,
+      externalSyncLink,
+      "callback_failed",
+    );
   }
+}
+
+async function loadExternalSyncLink({
+  state,
+  supabaseAdmin,
+}: {
+  state: string;
+  supabaseAdmin: ReturnType<typeof createSupabaseAdminClient>;
+}): Promise<ExternalSyncLinkRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from("google_workspace_sync_links")
+    .select("id, organization_id")
+    .eq("oauth_state", state)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data as ExternalSyncLinkRow;
+}
+
+async function runExternalGoogleWorkspaceSync({
+  integrationId,
+  organizationId,
+  supabaseAdmin,
+  syncLink,
+}: {
+  integrationId: string;
+  organizationId: string;
+  supabaseAdmin: ReturnType<typeof createSupabaseAdminClient>;
+  syncLink: ExternalSyncLinkRow;
+}): Promise<string | null> {
+  await supabaseAdmin
+    .from("google_workspace_sync_links")
+    .update({
+      last_error: null,
+      sync_started_at: new Date().toISOString(),
+    })
+    .eq("id", syncLink.id);
+  await createIntegrationAuditLog({
+    action: "external_sync_started",
+    actorUserId: null,
+    integrationId,
+    metadata: { syncLinkId: syncLink.id },
+    organizationId,
+    provider: "google_workspace",
+    supabaseAdmin,
+  });
+
+  try {
+    const summary = await runGoogleWorkspaceSync({
+      actorUserId: null,
+      organizationId,
+      supabaseAdmin,
+    });
+
+    await supabaseAdmin
+      .from("google_workspace_sync_links")
+      .update({
+        last_error: null,
+        sync_completed_at: new Date().toISOString(),
+      })
+      .eq("id", syncLink.id);
+    await createIntegrationAuditLog({
+      action: "external_sync_completed",
+      actorUserId: null,
+      integrationId,
+      metadata: {
+        ...summary,
+        syncLinkId: syncLink.id,
+      },
+      organizationId,
+      provider: "google_workspace",
+      supabaseAdmin,
+    });
+    revalidateGoogleFrontendCache(organizationId);
+
+    return null;
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Google Workspace sync failed.";
+
+    await updateExternalSyncLinkError({
+      message,
+      supabaseAdmin,
+      syncLink,
+    });
+    await createIntegrationAuditLog({
+      action: "external_sync_failed",
+      actorUserId: null,
+      integrationId,
+      message,
+      metadata: { syncLinkId: syncLink.id },
+      organizationId,
+      provider: "google_workspace",
+      supabaseAdmin,
+    });
+    revalidateGoogleFrontendCache(organizationId);
+
+    return message;
+  }
+}
+
+async function updateExternalSyncLinkError({
+  message,
+  supabaseAdmin,
+  syncLink,
+}: {
+  message: string;
+  supabaseAdmin: ReturnType<typeof createSupabaseAdminClient>;
+  syncLink: ExternalSyncLinkRow | null;
+}) {
+  if (!syncLink) {
+    return;
+  }
+
+  await supabaseAdmin
+    .from("google_workspace_sync_links")
+    .update({ last_error: message })
+    .eq("id", syncLink.id);
 }
 
 async function upsertFailedIntegration({
@@ -227,6 +453,35 @@ function redirectToGooglePage(
   }
 
   return Response.redirect(new URL("/app/settings/integrations", request.url));
+}
+
+function redirectToConnectionResult(
+  request: NextRequest,
+  syncLink: ExternalSyncLinkRow | null,
+  error: string | null,
+  connected?: string,
+): Response {
+  if (syncLink) {
+    return redirectToExternalSyncLinkComplete(
+      request,
+      error ?? (connected ? "success" : "cancelled"),
+    );
+  }
+
+  return redirectToGooglePage(request, error, connected);
+}
+
+function redirectToExternalSyncLinkComplete(
+  request: NextRequest,
+  status: string,
+): Response {
+  const redirectUrl = new URL(
+    "/integrations/google/sync-link/complete",
+    request.url,
+  );
+  redirectUrl.searchParams.set("status", status);
+
+  return Response.redirect(redirectUrl);
 }
 
 function redirectToSupabaseAuthCallback(request: NextRequest): Response {
