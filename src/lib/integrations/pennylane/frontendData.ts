@@ -127,6 +127,10 @@ function toPennylaneFrontendStatus(
   status: string | null | undefined,
   apiKeySource: PennylaneFrontendStatus["apiKeySource"],
 ): PennylaneFrontendStatus["status"] {
+  if (status === "disconnected" || status === "not_connected") {
+    return "not_connected";
+  }
+
   if (status === "syncing") {
     return "syncing";
   }

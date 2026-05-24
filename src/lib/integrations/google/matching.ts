@@ -1,3 +1,5 @@
+import { getKnownSaasDomain } from "../../suppliers/knownSaasBrands.ts";
+
 export type SupplierForIdentityMatch = {
   id: string;
   monthlySpend: number | null;
@@ -515,6 +517,12 @@ export function getKnownAliasTarget(normalizedName: string): string | null {
 }
 
 export function getKnownIdentityDomain(normalizedName: string): string | null {
+  const knownSaasDomain = getKnownSaasDomain(normalizedName);
+
+  if (knownSaasDomain) {
+    return knownSaasDomain;
+  }
+
   if (KNOWN_NORMALIZED_NAME_DOMAINS[normalizedName]) {
     return KNOWN_NORMALIZED_NAME_DOMAINS[normalizedName];
   }

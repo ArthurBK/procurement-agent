@@ -1,4 +1,4 @@
-import { searchLogoDevBrands } from "@/lib/suppliers/logoDevSearch";
+import { searchLogoDevBrandsForName } from "@/lib/suppliers/logoDevSearch";
 
 export const runtime = "nodejs";
 
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const results = await searchLogoDevBrands(query);
+    const results = await searchLogoDevBrandsForName(query);
 
     return Response.json({ results });
   } catch (error) {

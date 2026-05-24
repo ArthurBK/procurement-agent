@@ -18,6 +18,17 @@ type PennylaneSyncResult = {
   syncRunId?: string;
 };
 
+type PennylaneDisconnectResult = PennylaneFrontendStatus & {
+  deleted?: {
+    contractAppLinks: number;
+    contracts: number;
+    invoices: number;
+    saasSuppliers: number;
+    syncRuns: number;
+  };
+  errors?: string[];
+};
+
 export function PennylaneIntegrationCard({
   initialStatus,
 }: {
@@ -30,6 +41,7 @@ export function PennylaneIntegrationCard({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   const refreshStatus = useCallback(async () => {
     const response = await fetch("/api/integrations/pennylane/status");
@@ -140,7 +152,49 @@ export function PennylaneIntegrationCard({
     }
   }
 
+  async function disconnect() {
+    const confirmed = window.confirm(
+      "Disconnect Pennylane and delete all synced invoices, inferred contracts, and matches?",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setActionError(null);
+    setActionMessage(null);
+    setIsDisconnecting(true);
+
+    try {
+      const response = await fetch("/api/integrations/pennylane/disconnect", {
+        method: "DELETE",
+      });
+      const result = (await response.json()) as PennylaneDisconnectResult;
+
+      if (!response.ok) {
+        throw new Error(result.errors?.[0] ?? "Unable to disconnect Pennylane.");
+      }
+
+      setStatus(result);
+      setApiToken("");
+      setIsSyncing(false);
+      setActionMessage("Pennylane disconnected and synced data deleted.");
+      router.refresh();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Unable to disconnect Pennylane.",
+      );
+    } finally {
+      setIsDisconnecting(false);
+    }
+  }
+
   const canSync = status.hasApiKey && status.status !== "syncing";
+  const canDisconnect =
+    status.status !== "not_connected" ||
+    status.invoicesSynced > 0 ||
+    status.contractsInferred > 0 ||
+    Boolean(status.latestSyncStatus);
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white p-5 shadow-sm">
@@ -190,6 +244,7 @@ export function PennylaneIntegrationCard({
             <input
               autoComplete="off"
               className="h-10 rounded-md border border-zinc-300 px-3 text-sm font-normal text-zinc-950 outline-none transition focus:border-zinc-500"
+              disabled={isDisconnecting}
               onChange={(event) => setApiToken(event.target.value)}
               placeholder="Paste a Pennylane API key"
               type="password"
@@ -199,7 +254,7 @@ export function PennylaneIntegrationCard({
           <div className="flex flex-wrap gap-2">
             <button
               className="inline-flex h-10 items-center justify-center rounded-md border border-zinc-300 bg-white px-4 text-sm font-medium text-zinc-800 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:text-zinc-300"
-              disabled={isSaving || !apiToken.trim()}
+              disabled={isSaving || isDisconnecting || !apiToken.trim()}
               onClick={saveKey}
               type="button"
             >
@@ -207,12 +262,22 @@ export function PennylaneIntegrationCard({
             </button>
             <button
               className="inline-flex h-10 items-center justify-center rounded-md bg-zinc-950 px-4 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-300"
-              disabled={!canSync || isSyncing}
+              disabled={!canSync || isSyncing || isDisconnecting}
               onClick={runSync}
               type="button"
             >
               {isSyncing || status.status === "syncing" ? "Syncing..." : "Run sync"}
             </button>
+            {canDisconnect ? (
+              <button
+                className="inline-flex h-10 items-center justify-center rounded-md border border-red-200 bg-white px-4 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:text-red-300"
+                disabled={isDisconnecting || status.status === "syncing"}
+                onClick={disconnect}
+                type="button"
+              >
+                {isDisconnecting ? "Disconnecting..." : "Disconnect"}
+              </button>
+            ) : null}
           </div>
         </div>
       </div>

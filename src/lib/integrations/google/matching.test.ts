@@ -258,6 +258,54 @@ test("resolves Google Workspace supplier domains from deterministic identity ali
     }),
     "notion.so",
   );
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: null,
+      supplierName: "Claude",
+    }),
+    "claude.ai",
+  );
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: null,
+      supplierName: "Canva Pro",
+    }),
+    "canva.com",
+  );
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: null,
+      supplierName: "Docker Hub",
+    }),
+    "docker.com",
+  );
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: null,
+      supplierName: "ElevenLabs",
+    }),
+    "elevenlabs.io",
+  );
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: null,
+      supplierName: "Perpplexity AI",
+    }),
+    "perplexity.ai",
+  );
+  assert.equal(
+    resolveIdentitySupplierDomain({
+      source: "google_workspace",
+      supplierDomain: null,
+      supplierName: "Zapier Automation",
+    }),
+    "zapier.com",
+  );
 });
 
 test("does not trust Logo.dev domains for unknown Google Workspace suppliers", () => {

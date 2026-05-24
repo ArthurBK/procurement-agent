@@ -3,10 +3,11 @@ import "server-only";
 import { normalizeSupplierKey } from "@/lib/recurring/normalizeSupplierKey";
 import { buildLogoUrl, normalizeDomain } from "@/lib/suppliers/logo";
 import {
-  searchLogoDevBrands,
+  pickBestLogoDevSearchResult,
+  searchLogoDevBrandsForName,
+  shouldRepairLogoDevProfile,
   type LogoDevSearchResult,
 } from "@/lib/suppliers/logoDevSearch";
-import { buildLogoSearchQueries } from "@/lib/suppliers/logoSearchQueries";
 import type { LogoSource } from "@/lib/suppliers/types";
 import type { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -76,24 +77,42 @@ export async function autoEnrichIdentitySupplierLogos({
   });
   const upserts: SupplierProfileUpsert[] = [];
   const suppliersToSearch: SaasSupplierLogoRow[] = [];
+  const now = new Date().toISOString();
 
   for (const supplier of suppliers) {
     const supplierKey = normalizeSupplierKey(supplier.supplier_name);
     const profile = profilesByKey.get(supplierKey);
+    const repairedLogo = shouldRepairLogoDevProfile({
+      displayName: supplier.supplier_name,
+      profile,
+    });
+
+    if (!supplierKey) {
+      continue;
+    }
+
+    if (repairedLogo) {
+      upserts.push({
+        display_name: repairedLogo.name,
+        domain: repairedLogo.domain,
+        logo_source: "logo_dev",
+        logo_url: repairedLogo.logoUrl,
+        supplier_key: supplierKey,
+        updated_at: now,
+      });
+      continue;
+    }
 
     if (
       normalizeDomain(supplier.supplier_domain) ||
       hasDisplayableLogo(profile) ||
-      profile?.logo_source === "none" ||
-      !supplierKey
+      profile?.logo_source === "none"
     ) {
       continue;
     }
 
     suppliersToSearch.push(supplier);
   }
-
-  const now = new Date().toISOString();
 
   for (const supplier of suppliersToSearch.slice(0, limit)) {
     const supplierKey = normalizeSupplierKey(supplier.supplier_name);
@@ -208,16 +227,10 @@ async function loadSupplierProfilesByKey({
 async function findLogoResult(
   supplierName: string,
 ): Promise<LogoDevSearchResult | null> {
-  for (const query of buildLogoSearchQueries(supplierName)) {
-    const results = await searchLogoDevBrands(query).catch(() => []);
-    const resultWithLogo = results.find((result) => result.logoUrl);
-
-    if (resultWithLogo) {
-      return resultWithLogo;
-    }
-  }
-
-  return null;
+  return pickBestLogoDevSearchResult(
+    supplierName,
+    await searchLogoDevBrandsForName(supplierName).catch(() => []),
+  );
 }
 
 function hasDisplayableLogo(
